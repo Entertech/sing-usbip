@@ -141,7 +141,7 @@ func (h *windowsExportHost) Close() error {
 func (h *windowsExportHost) Events() (<-chan struct{}, error) {
 	ch := make(chan struct{}, 1)
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(windowsDeviceWatchInterval)
 		defer ticker.Stop()
 		for {
 			select {

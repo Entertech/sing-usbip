@@ -3,11 +3,14 @@
 package usbip
 
 import (
+	"context"
 	"time"
 
 	"github.com/sagernet/sing-usbip/internal/vboxusb"
 	E "github.com/sagernet/sing/common/exceptions"
 )
+
+const windowsDeviceWatchInterval = 2 * time.Second
 
 type windowsLocalDevice struct {
 	stableID string
@@ -139,6 +142,22 @@ func OpenLocalDevice(id string, capture bool) (LocalDevice, error) {
 	}
 	local.engine = newVBoxUSBEngine(device)
 	return local, nil
+}
+
+func WatchLocalDevices(ctx context.Context, callback func()) error {
+	go func() {
+		ticker := time.NewTicker(windowsDeviceWatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				callback()
+			}
+		}
+	}()
+	return nil
 }
 
 func (d *windowsLocalDevice) StableID() string {

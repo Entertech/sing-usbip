@@ -3,6 +3,7 @@
 package usbip
 
 import (
+	"context"
 	"fmt"
 
 	E "github.com/sagernet/sing/common/exceptions"
@@ -54,6 +55,27 @@ func OpenLocalDevice(id string, capture bool) (LocalDevice, error) {
 		},
 		engine: newUsbfsEngine(fd, claimed),
 	}, nil
+}
+
+func WatchLocalDevices(ctx context.Context, callback func()) error {
+	listener, err := newUEventListener()
+	if err != nil {
+		return err
+	}
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	go func() {
+		for {
+			waitErr := listener.WaitUSBEvent()
+			if waitErr != nil {
+				return
+			}
+			callback()
+		}
+	}()
+	return nil
 }
 
 func (d *linuxLocalDevice) StableID() string {
