@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-usbip/internal/vboxusb"
+	"github.com/sagernet/sing-usbip/internal/wincfgmgr32"
 	E "github.com/sagernet/sing/common/exceptions"
 )
-
-const windowsDeviceWatchInterval = 2 * time.Second
 
 type windowsLocalDevice struct {
 	stableID string
@@ -145,17 +144,20 @@ func OpenLocalDevice(id string, capture bool) (LocalDevice, error) {
 }
 
 func WatchLocalDevices(ctx context.Context, callback func()) error {
+	onEvent := func(action uint32) { callback() }
+	deviceNotification, err := wincfgmgr32.RegisterDeviceInterfaceNotification(vboxusb.USBDeviceInterfaceGUID, onEvent)
+	if err != nil {
+		return E.Cause(err, "register USB interface notification")
+	}
+	captureNotification, err := wincfgmgr32.RegisterDeviceInterfaceNotification(vboxusb.MonitorAccessGUID, onEvent)
+	if err != nil {
+		_ = deviceNotification.Close()
+		return E.Cause(err, "register VBoxUSB interface notification")
+	}
 	go func() {
-		ticker := time.NewTicker(windowsDeviceWatchInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				callback()
-			}
-		}
+		<-ctx.Done()
+		_ = deviceNotification.Close()
+		_ = captureNotification.Close()
 	}()
 	return nil
 }

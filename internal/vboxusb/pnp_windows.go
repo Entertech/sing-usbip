@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sagernet/sing-usbip/internal/wincfgmgr32"
 	E "github.com/sagernet/sing/common/exceptions"
 
 	"golang.org/x/sys/windows"
@@ -153,16 +154,32 @@ func EnumerateUSBDevices() ([]USBDeviceInfo, error) {
 // hub driver and therefore stable across the rewrite — is the only
 // reliable key.
 func WaitForCapturedDevice(busNumber, address uint32, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
+	arrival := make(chan struct{}, 1)
+	notification, err := wincfgmgr32.RegisterDeviceInterfaceNotification(MonitorAccessGUID, func(action uint32) {
+		if action != wincfgmgr32.CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL {
+			return
+		}
+		select {
+		case arrival <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		return "", E.Cause(err, "vboxusb: register VBoxUSB interface notification")
+	}
+	defer notification.Close()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
 	for {
-		path, err := findCapturedDevice(busNumber, address)
-		if err == nil {
+		path, probeErr := findCapturedDevice(busNumber, address)
+		if probeErr == nil {
 			return path, nil
 		}
-		if time.Now().After(deadline) {
-			return "", E.Cause(err, "vboxusb: VBoxUSB interface for ", busNumber, "-", address, " did not appear within ", timeout)
+		select {
+		case <-arrival:
+		case <-deadline.C:
+			return "", E.Cause(probeErr, "vboxusb: VBoxUSB interface for ", busNumber, "-", address, " did not appear within ", timeout)
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 

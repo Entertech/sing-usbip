@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-usbip/internal/vboxusb"
+	"github.com/sagernet/sing-usbip/internal/wincfgmgr32"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
 )
@@ -35,7 +36,10 @@ func newPlatformImportHost(logger logger.ContextLogger) (ImportHost, error) {
 	return &windowsImportHost{logger: logger}, nil
 }
 
-const windowsExportAbsenceGrace = 10 * time.Second
+const (
+	windowsExportAbsenceGrace     = 10 * time.Second
+	windowsEnumerateRetryInterval = time.Second
+)
 
 type windowsExportHost struct {
 	logger  logger.ContextLogger
@@ -44,10 +48,12 @@ type windowsExportHost struct {
 	runCtx    context.Context
 	runCancel context.CancelFunc
 
-	access  sync.Mutex
-	monitor *vboxusb.Monitor
-	exports map[string]*windowsExport
-	filters map[string]uint64
+	access       sync.Mutex
+	monitor      *vboxusb.Monitor
+	exports      map[string]*windowsExport
+	filters      map[string]uint64
+	eventsCh     chan struct{}
+	recheckTimer *time.Timer
 }
 
 func newWindowsExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch) *windowsExportHost {
@@ -140,28 +146,74 @@ func (h *windowsExportHost) Close() error {
 
 func (h *windowsExportHost) Events() (<-chan struct{}, error) {
 	ch := make(chan struct{}, 1)
+	h.access.Lock()
+	h.eventsCh = ch
+	h.access.Unlock()
+	onEvent := func(action uint32) { h.signalEvents() }
+	deviceNotification, err := wincfgmgr32.RegisterDeviceInterfaceNotification(vboxusb.USBDeviceInterfaceGUID, onEvent)
+	if err != nil {
+		h.clearEvents()
+		close(ch)
+		return nil, E.Cause(err, "windows usbip: register USB interface notification")
+	}
+	captureNotification, err := wincfgmgr32.RegisterDeviceInterfaceNotification(vboxusb.MonitorAccessGUID, onEvent)
+	if err != nil {
+		_ = deviceNotification.Close()
+		h.clearEvents()
+		close(ch)
+		return nil, E.Cause(err, "windows usbip: register VBoxUSB interface notification")
+	}
 	go func() {
-		ticker := time.NewTicker(windowsDeviceWatchInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-h.runCtx.Done():
-				close(ch)
-				return
-			case <-ticker.C:
-				select {
-				case ch <- struct{}{}:
-				default:
-				}
-			}
-		}
+		<-h.runCtx.Done()
+		h.clearEvents()
+		_ = deviceNotification.Close()
+		_ = captureNotification.Close()
+		close(ch)
 	}()
 	return ch, nil
+}
+
+func (h *windowsExportHost) signalEvents() {
+	h.access.Lock()
+	defer h.access.Unlock()
+	if h.eventsCh == nil {
+		return
+	}
+	select {
+	case h.eventsCh <- struct{}{}:
+	default:
+	}
+}
+
+func (h *windowsExportHost) clearEvents() {
+	h.access.Lock()
+	defer h.access.Unlock()
+	h.eventsCh = nil
+	if h.recheckTimer != nil {
+		h.recheckTimer.Stop()
+		h.recheckTimer = nil
+	}
+}
+
+// scheduleRecheck wakes the reconcile loop once, for state that expires by
+// time instead of by a device event: the absence grace period and retry
+// after a failed enumeration.
+func (h *windowsExportHost) scheduleRecheck(after time.Duration) {
+	h.access.Lock()
+	defer h.access.Unlock()
+	if h.eventsCh == nil {
+		return
+	}
+	if h.recheckTimer != nil {
+		h.recheckTimer.Stop()
+	}
+	h.recheckTimer = time.AfterFunc(after, h.signalEvents)
 }
 
 func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[string]Export, []string, error) {
 	devices, err := vboxusb.EnumerateUSBDevices()
 	if err != nil {
+		h.scheduleRecheck(windowsEnumerateRetryInterval)
 		return h.snapshotSelf(), nil, E.Cause(err, "windows usbip: enumerate USB devices")
 	}
 
@@ -200,6 +252,7 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 
 	now := time.Now()
 	var released []string
+	var graceRecheck time.Duration
 	for busid, info := range desired {
 		if export, found := current[busid]; found {
 			if !info.IdentityIsStub() && (info.VendorID != export.info.VendorID || info.ProductID != export.info.ProductID) {
@@ -233,8 +286,14 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 			continue
 		}
 		info, isPresent := present[busid]
-		if !isPresent && now.Sub(export.seenAt()) < windowsExportAbsenceGrace {
-			continue
+		if !isPresent {
+			remaining := windowsExportAbsenceGrace - now.Sub(export.seenAt())
+			if remaining > 0 {
+				if graceRecheck == 0 || remaining < graceRecheck {
+					graceRecheck = remaining
+				}
+				continue
+			}
 		}
 		h.releaseDevice(monitor, busid, export, info, isPresent)
 		delete(current, busid)
@@ -246,6 +305,9 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 	h.exports = current
 	h.access.Unlock()
 
+	if graceRecheck > 0 {
+		h.scheduleRecheck(graceRecheck)
+	}
 	return h.snapshotSelf(), released, nil
 }
 
