@@ -3,6 +3,7 @@
 package vboxusb
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -245,26 +246,33 @@ func extractImpl() (string, error) {
 
 func ensureAsset(dir string, asset assetFile) error {
 	target := filepath.Join(dir, asset.name)
-	_, err := os.Stat(target)
+	existing, err := os.ReadFile(target)
 	if err == nil {
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return E.Cause(err, "vboxusb: stat ", asset.name)
+		if bytes.Equal(existing, asset.data) {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return E.Cause(err, "vboxusb: read ", asset.name)
 	}
 	tmp := target + ".tmp-" + strconv.Itoa(os.Getpid())
-	err = os.WriteFile(tmp, asset.data, 0o644)
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
+		return E.Cause(err, "vboxusb: create ", asset.name)
+	}
+	_, err = file.Write(asset.data)
+	err = E.Errors(err, file.Sync(), file.Close())
+	if err != nil {
+		os.Remove(tmp)
 		return E.Cause(err, "vboxusb: write ", asset.name)
 	}
 	err = os.Rename(tmp, target)
 	if err != nil {
 		os.Remove(tmp)
-		_, statErr := os.Stat(target)
-		if statErr == nil {
+		current, readErr := os.ReadFile(target)
+		if readErr == nil && bytes.Equal(current, asset.data) {
 			return nil
 		}
-		return E.Cause(err, "vboxusb: rename ", asset.name)
+		return E.Cause(err, "vboxusb: replace ", asset.name)
 	}
 	return nil
 }
