@@ -1,4 +1,4 @@
-//go:build windows && arm64
+//go:build windows && arm64 && !with_external_usbip_drivers
 
 package vboxusb
 
@@ -16,11 +16,11 @@ var vboxUSBCat []byte
 //go:embed assets/arm64/VBoxUSBMon.sys
 var vboxUSBMonSys []byte
 
-func assetFiles() []assetFile {
+func assetFiles() ([]assetFile, error) {
 	return []assetFile{
 		{"VBoxUSB.sys", vboxUSBSys},
 		{"VBoxUSB.inf", vboxUSBInf},
 		{"VBoxUSB.cat", vboxUSBCat},
 		{"VBoxUSBMon.sys", vboxUSBMonSys},
-	}
+	}, nil
 }

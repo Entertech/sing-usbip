@@ -1,7 +1,5 @@
 package vboxusb
 
-const AssetVersion = "7.2.14.24565"
-
 const (
 	DriverMajorVersion = 5
 	DriverMinorVersion = 0

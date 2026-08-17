@@ -1,4 +1,4 @@
-//go:build windows && amd64
+//go:build windows && amd64 && !with_external_usbip_drivers
 
 package usbipvhci
 
@@ -22,9 +22,7 @@ var filterInf []byte
 //go:embed assets/amd64/usbip2_filter.cat
 var filterCat []byte
 
-func assetVersion() string { return "0.9.7.7" }
-
-func assetFiles() []assetFile {
+func assetFiles() ([]assetFile, error) {
 	return []assetFile{
 		{"usbip2_ude.sys", udeSys},
 		{"usbip2_ude.inf", udeInf},
@@ -32,5 +30,5 @@ func assetFiles() []assetFile {
 		{"usbip2_filter.sys", filterSys},
 		{"usbip2_filter.inf", filterInf},
 		{"usbip2_filter.cat", filterCat},
-	}
+	}, nil
 }

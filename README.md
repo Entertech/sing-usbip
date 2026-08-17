@@ -8,7 +8,12 @@ Backends:
 |----------|----------------------------------|---------------------------------------|
 | Linux    | `usbip-host` kernel driver       | `vhci_hcd` kernel driver              |
 | macOS    | IOUSBHost (disable SIP required) | IOUSBHostControllerInterface          |
-| Windows  | VBoxUSB drivers (embedded)       | usbip-win2 UDE vhci driver (embedded) |
+| Windows  | VBoxUSB drivers (bundled)        | usbip-win2 UDE vhci driver (bundled)  |
+
+The Windows drivers are embedded in the binary by default. Builds with the
+`with_external_usbip_drivers` tag instead load them from the executable
+directory, verified against the digests in `driverassets`; regenerate the
+digests with `go generate ./driverassets` after replacing driver files.
 
 ## Control extension
 

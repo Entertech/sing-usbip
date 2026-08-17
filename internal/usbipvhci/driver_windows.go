@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/sagernet/sing-usbip/driverassets"
 	"github.com/sagernet/sing-usbip/internal/winsetupapi"
 	E "github.com/sagernet/sing/common/exceptions"
 
@@ -221,7 +222,10 @@ func ensureExtracted() (string, error) {
 }
 
 func extractImpl() (string, error) {
-	files := assetFiles()
+	files, err := assetFiles()
+	if err != nil {
+		return "", err
+	}
 	if len(files) == 0 {
 		return "", E.New("usbipvhci: no bundled driver for ", runtime.GOARCH)
 	}
@@ -229,7 +233,7 @@ func extractImpl() (string, error) {
 	if err != nil {
 		return "", E.Cause(err, "usbipvhci: locate user cache dir")
 	}
-	dir := filepath.Join(base, "sing-usbip", "usbipvhci", "v"+assetVersion())
+	dir := filepath.Join(base, "sing-usbip", "usbipvhci", "v"+driverassets.VHCI[runtime.GOARCH].Version)
 	err = os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return "", E.Cause(err, "usbipvhci: mkdir ", dir)
