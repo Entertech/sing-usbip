@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/sagernet/sing-usbip/internal/winsetupapi"
 	E "github.com/sagernet/sing/common/exceptions"
 
 	"golang.org/x/sys/windows"
@@ -188,7 +189,7 @@ func installVBoxUSBInf(dir string) error {
 			// Already present in driver store; not an error.
 			return nil
 		}
-		return E.Cause(callErr, "vboxusb: SetupCopyOEMInfW")
+		return winsetupapi.Cause(callErr, "vboxusb: SetupCopyOEMInfW")
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/sagernet/sing-usbip/internal/winsetupapi"
 	E "github.com/sagernet/sing/common/exceptions"
 
 	"golang.org/x/sys/windows"
@@ -119,7 +120,7 @@ func addToDriverStore(infPath string) error {
 		if errors.Is(callErr, windows.ERROR_ACCESS_DENIED) {
 			return E.Cause(callErr, "SetupCopyOEMInfW (Administrator required)")
 		}
-		return E.Cause(callErr, "SetupCopyOEMInfW")
+		return winsetupapi.Cause(callErr, "SetupCopyOEMInfW")
 	}
 	return nil
 }
@@ -132,22 +133,22 @@ func createDevnodeAndInstall(infPath string) error {
 
 	devInfoSet, err := windows.SetupDiCreateDeviceInfoListEx(&classGUIDDevClassUSB, 0, "")
 	if err != nil {
-		return E.Cause(err, "SetupDiCreateDeviceInfoListEx")
+		return winsetupapi.Cause(err, "SetupDiCreateDeviceInfoListEx")
 	}
 	defer devInfoSet.Close()
 
 	devInfoData, err := windows.SetupDiCreateDeviceInfo(devInfoSet, "USB", &classGUIDDevClassUSB, "", 0, windows.DICD_GENERATE_ID)
 	if err != nil {
-		return E.Cause(err, "SetupDiCreateDeviceInfo")
+		return winsetupapi.Cause(err, "SetupDiCreateDeviceInfo")
 	}
 
 	err = windows.SetupDiSetDeviceRegistryProperty(devInfoSet, devInfoData, windows.SPDRP_HARDWAREID, multiSzUTF16(udeHardwareID))
 	if err != nil {
-		return E.Cause(err, "SetupDiSetDeviceRegistryProperty")
+		return winsetupapi.Cause(err, "SetupDiSetDeviceRegistryProperty")
 	}
 	err = windows.SetupDiCallClassInstaller(windows.DIF_REGISTERDEVICE, devInfoSet, devInfoData)
 	if err != nil {
-		return E.Cause(err, "SetupDiCallClassInstaller(DIF_REGISTERDEVICE)")
+		return winsetupapi.Cause(err, "SetupDiCallClassInstaller(DIF_REGISTERDEVICE)")
 	}
 	return updateDriverForPlugAndPlayDevices(udeHardwareID, infPath)
 }
@@ -173,7 +174,7 @@ func updateDriverForPlugAndPlayDevices(hardwareID, infPath string) error {
 		uintptr(unsafe.Pointer(&rebootRequired)),
 	)
 	if ret == 0 {
-		return E.Cause(callErr, "UpdateDriverForPlugAndPlayDevices")
+		return winsetupapi.Cause(callErr, "UpdateDriverForPlugAndPlayDevices")
 	}
 	return nil
 }
