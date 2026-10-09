@@ -21,6 +21,14 @@ func darwinTrace(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "%s usbip-darwin %s\n", time.Now().Format("15:04:05.000000"), fmt.Sprintf(format, args...))
 }
 
+const darwinEndpointStateHalted = 1
+
+// darwinEndpointLabel names an endpoint by the USB/IP devid of its virtual
+// controller, so traces of several imported devices stay distinguishable.
+func darwinEndpointLabel(devID uint32, device uint8, endpoint uint8) string {
+	return fmt.Sprintf("%x/%d.%02x", devID, device, endpoint)
+}
+
 func darwinEndpointStateName(state uint8) string {
 	switch state {
 	case 0:

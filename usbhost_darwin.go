@@ -12,7 +12,6 @@ package usbip
 import "C"
 
 import (
-	"fmt"
 	"os"
 	"runtime/cgo"
 	"sync"
@@ -24,8 +23,9 @@ import (
 )
 
 const (
-	ciStatusSuccess     = 1
-	ciStatusNoResources = 6
+	ciStatusSuccess      = 1
+	ciStatusNotPermitted = 3
+	ciStatusNoResources  = 6
 	// the completion status the SDK requires for transfers retired by an
 	// EndpointPause command rather than by actual completion.
 	ciStatusEndpointStopped = 7
@@ -100,6 +100,7 @@ func (c cgoCallbackHandle) closeAfter(destroyC func()) {
 type darwinUSBHostController struct {
 	handle   *C.box_usbhost_controller_t
 	callback cgoCallbackHandle
+	devID    uint32
 }
 
 type darwinUSBHostDeviceSM struct {
@@ -194,7 +195,7 @@ func darwinCreateUSBHostController(controller *darwinVirtualController, portCoun
 		ref.deleteRaw()
 		return nil, darwinCError(errorPtr)
 	}
-	return &darwinUSBHostController{handle: handle, callback: ref}, nil
+	return &darwinUSBHostController{handle: handle, callback: ref, devID: controller.info.DevID()}, nil
 }
 
 func (c *darwinUSBHostController) Close() {
@@ -277,7 +278,7 @@ func (c *darwinUSBHostController) createEndpointSM(message darwinCIMessage) (*da
 	if handle == nil {
 		return nil, darwinCError(errorPtr)
 	}
-	return &darwinUSBHostEndpointSM{handle: handle, label: fmt.Sprintf("%d.%02x", message.deviceAddress(), message.endpointAddress())}, nil
+	return &darwinUSBHostEndpointSM{handle: handle, label: darwinEndpointLabel(c.devID, message.deviceAddress(), message.endpointAddress())}, nil
 }
 
 func (s *darwinUSBHostEndpointSM) Close() {

@@ -157,7 +157,7 @@ func (c *darwinVirtualController) eventLoop() {
 }
 
 func (c *darwinVirtualController) handleCommand(message darwinCIMessage) {
-	darwinTrace("command type=0x%02x ctl=0x%08x data0=0x%08x data1=0x%x", message.messageType(), message.control, message.data0, message.data1)
+	darwinTrace("controller %x command type=0x%02x ctl=0x%08x data0=0x%08x data1=0x%x", c.info.DevID(), message.messageType(), message.control, message.data0, message.data1)
 	var err error
 	switch message.messageType() {
 	case ciMsgControllerPowerOn, ciMsgControllerPowerOff, ciMsgControllerStart, ciMsgControllerPause:
@@ -289,7 +289,7 @@ func (c *darwinVirtualController) handleDoorbell(doorbell uint32) {
 		endpoint: uint8((doorbell >> 8) & 0xff),
 	}
 	endpoint := c.endpoints[key]
-	darwinTrace("doorbell 0x%08x known=%t", doorbell, endpoint != nil)
+	darwinTrace("controller %x doorbell 0x%08x known=%t", c.info.DevID(), doorbell, endpoint != nil)
 	if endpoint == nil {
 		return
 	}
