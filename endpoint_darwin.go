@@ -165,6 +165,7 @@ func (e *darwinEndpoint) handleCommand(message darwinCIMessage) bool {
 // must complete with EndpointStopped: any other non-success status transitions
 // the endpoint to Halted.
 func (e *darwinEndpoint) abortPending(pending *pendingTransfer, retiredByCommand bool) {
+	darwinTrace("ep %d.%02x cancel seq=%d ptr=%p byCommand=%t", e.key.device, e.key.endpoint, pending.transaction.SeqNum(), pending.transfer.ptr, retiredByCommand)
 	_ = pending.transaction.Cancel()
 	select {
 	case <-pending.transaction.Done():
@@ -191,6 +192,7 @@ func (e *darwinEndpoint) abortPending(pending *pendingTransfer, retiredByCommand
 
 func (e *darwinEndpoint) finalizePending(pending *pendingTransfer) {
 	response, err := pending.transaction.Wait()
+	darwinTrace("ep %d.%02x urb done seq=%d status=%d actual=%d err=%v", e.key.device, e.key.endpoint, pending.transaction.SeqNum(), response.Status, response.ActualLength, err)
 	var status int32
 	var length int
 	switch {
@@ -266,6 +268,7 @@ func (p *pendingTransfer) accept(response SubmitResponse) (int32, int, error) {
 
 func (e *darwinEndpoint) startTransfer(transfer darwinCITransfer, noResponse bool) *pendingTransfer {
 	message := transfer.message
+	darwinTrace("ep %d.%02x start ptr=%p ctl=0x%08x data0=0x%08x data1=0x%x setupSet=%t", e.key.device, e.key.endpoint, transfer.ptr, message.control, message.data0, message.data1, e.setupSet)
 	switch message.messageType() {
 	case ciMsgSetupTransfer:
 		e.setup = message.setup()

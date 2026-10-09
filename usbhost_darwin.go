@@ -12,6 +12,7 @@ package usbip
 import "C"
 
 import (
+	"fmt"
 	"os"
 	"runtime/cgo"
 	"sync"
@@ -107,6 +108,7 @@ type darwinUSBHostDeviceSM struct {
 
 type darwinUSBHostEndpointSM struct {
 	handle *C.box_usbhost_endpoint_sm_t
+	label  string
 }
 
 type darwinUSBHostDeviceInfo struct {
@@ -275,7 +277,7 @@ func (c *darwinUSBHostController) createEndpointSM(message darwinCIMessage) (*da
 	if handle == nil {
 		return nil, darwinCError(errorPtr)
 	}
-	return &darwinUSBHostEndpointSM{handle: handle}, nil
+	return &darwinUSBHostEndpointSM{handle: handle, label: fmt.Sprintf("%d.%02x", message.deviceAddress(), message.endpointAddress())}, nil
 }
 
 func (s *darwinUSBHostEndpointSM) Close() {
@@ -289,7 +291,10 @@ func (s *darwinUSBHostEndpointSM) Close() {
 func (s *darwinUSBHostEndpointSM) respond(message darwinCIMessage, status int) error {
 	cMessage := message.c()
 	var errorPtr *C.char
-	if !bool(C.box_usbhost_endpoint_sm_respond(s.handle, &cMessage, C.int(status), &errorPtr)) {
+	before := s.state()
+	ok := bool(C.box_usbhost_endpoint_sm_respond(s.handle, &cMessage, C.int(status), &errorPtr))
+	darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	if !ok {
 		return darwinCError(errorPtr)
 	}
 	return nil
@@ -297,10 +302,17 @@ func (s *darwinUSBHostEndpointSM) respond(message darwinCIMessage, status int) e
 
 func (s *darwinUSBHostEndpointSM) processDoorbell(doorbell uint32) error {
 	var errorPtr *C.char
-	if !bool(C.box_usbhost_endpoint_sm_process_doorbell(s.handle, C.uint32_t(doorbell), &errorPtr)) {
+	before := s.state()
+	ok := bool(C.box_usbhost_endpoint_sm_process_doorbell(s.handle, C.uint32_t(doorbell), &errorPtr))
+	darwinTrace("ep %s doorbell 0x%08x ok=%t state %s->%s current=%p", s.label, doorbell, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	if !ok {
 		return darwinCError(errorPtr)
 	}
 	return nil
+}
+
+func (s *darwinUSBHostEndpointSM) state() uint8 {
+	return uint8(C.box_usbhost_endpoint_sm_state(s.handle))
 }
 
 func (s *darwinUSBHostEndpointSM) currentTransfer() darwinCITransfer {
@@ -321,7 +333,10 @@ func (s *darwinUSBHostEndpointSM) currentTransfer() darwinCITransfer {
 
 func (s *darwinUSBHostEndpointSM) complete(transfer darwinCITransfer, status int, length int) error {
 	var errorPtr *C.char
-	if !bool(C.box_usbhost_endpoint_sm_complete(s.handle, (*C.IOUSBHostCIMessage)(transfer.ptr), C.int(status), C.size_t(length), &errorPtr)) {
+	before := s.state()
+	ok := bool(C.box_usbhost_endpoint_sm_complete(s.handle, (*C.IOUSBHostCIMessage)(transfer.ptr), C.int(status), C.size_t(length), &errorPtr))
+	darwinTrace("ep %s complete ptr=%p type=0x%02x data1=0x%x status=%d len=%d ok=%t state %s->%s current=%p", s.label, transfer.ptr, transfer.message.messageType(), transfer.message.data1, status, length, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	if !ok {
 		return darwinCError(errorPtr)
 	}
 	return nil

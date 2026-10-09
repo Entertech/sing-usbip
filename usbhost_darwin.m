@@ -1033,6 +1033,11 @@ bool box_usbhost_endpoint_sm_complete(box_usbhost_endpoint_sm_t *endpoint, const
 	return ok;
 }
 
+uint8_t box_usbhost_endpoint_sm_state(box_usbhost_endpoint_sm_t *endpoint) {
+	IOUSBHostCIEndpointStateMachine *state_machine = box_endpoint_sm(endpoint);
+	return state_machine == nil ? 0 : (uint8_t)state_machine.endpointState;
+}
+
 uint8_t box_usbhost_ci_message_type(const IOUSBHostCIMessage *message) {
 	return message == NULL ? 0 : (uint8_t)IOUSBHostCIMessageTypeFromMessage(message);
 }
