@@ -30,6 +30,8 @@ const (
 	// EndpointPause command rather than by actual completion.
 	ciStatusEndpointStopped = 7
 
+	ciEndpointStateHalted = 1
+
 	ciMsgControllerPowerOn     = 0x10
 	ciMsgControllerPowerOff    = 0x11
 	ciMsgControllerStart       = 0x12
@@ -292,9 +294,14 @@ func (s *darwinUSBHostEndpointSM) Close() {
 func (s *darwinUSBHostEndpointSM) respond(message darwinCIMessage, status int) error {
 	cMessage := message.c()
 	var errorPtr *C.char
-	before := s.state()
+	var before uint8
+	if darwinTraceEnabled {
+		before = s.state()
+	}
 	ok := bool(C.box_usbhost_endpoint_sm_respond(s.handle, &cMessage, C.int(status), &errorPtr))
-	darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	if darwinTraceEnabled {
+		darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	}
 	if !ok {
 		return darwinCError(errorPtr)
 	}
@@ -308,7 +315,9 @@ func (s *darwinUSBHostEndpointSM) inspect(message darwinCIMessage) error {
 	cMessage := message.c()
 	var errorPtr *C.char
 	ok := bool(C.box_usbhost_endpoint_sm_inspect(s.handle, &cMessage, &errorPtr))
-	darwinTrace("ep %s inspect cmd=0x%02x ok=%t state=%s", s.label, message.messageType(), ok, darwinEndpointStateName(s.state()))
+	if darwinTraceEnabled {
+		darwinTrace("ep %s inspect cmd=0x%02x ok=%t state=%s", s.label, message.messageType(), ok, darwinEndpointStateName(s.state()))
+	}
 	if !ok {
 		return darwinCError(errorPtr)
 	}
@@ -318,9 +327,14 @@ func (s *darwinUSBHostEndpointSM) inspect(message darwinCIMessage) error {
 func (s *darwinUSBHostEndpointSM) respondInspected(message darwinCIMessage, status int) error {
 	cMessage := message.c()
 	var errorPtr *C.char
-	before := s.state()
+	var before uint8
+	if darwinTraceEnabled {
+		before = s.state()
+	}
 	ok := bool(C.box_usbhost_endpoint_sm_respond_inspected(s.handle, &cMessage, C.int(status), &errorPtr))
-	darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	if darwinTraceEnabled {
+		darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	}
 	if !ok {
 		return darwinCError(errorPtr)
 	}
@@ -329,9 +343,14 @@ func (s *darwinUSBHostEndpointSM) respondInspected(message darwinCIMessage, stat
 
 func (s *darwinUSBHostEndpointSM) processDoorbell(doorbell uint32) error {
 	var errorPtr *C.char
-	before := s.state()
+	var before uint8
+	if darwinTraceEnabled {
+		before = s.state()
+	}
 	ok := bool(C.box_usbhost_endpoint_sm_process_doorbell(s.handle, C.uint32_t(doorbell), &errorPtr))
-	darwinTrace("ep %s doorbell 0x%08x ok=%t state %s->%s current=%p", s.label, doorbell, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	if darwinTraceEnabled {
+		darwinTrace("ep %s doorbell 0x%08x ok=%t state %s->%s current=%p", s.label, doorbell, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	}
 	if !ok {
 		return darwinCError(errorPtr)
 	}
@@ -360,9 +379,14 @@ func (s *darwinUSBHostEndpointSM) currentTransfer() darwinCITransfer {
 
 func (s *darwinUSBHostEndpointSM) complete(transfer darwinCITransfer, status int, length int) error {
 	var errorPtr *C.char
-	before := s.state()
+	var before uint8
+	if darwinTraceEnabled {
+		before = s.state()
+	}
 	ok := bool(C.box_usbhost_endpoint_sm_complete(s.handle, (*C.IOUSBHostCIMessage)(transfer.ptr), C.int(status), C.size_t(length), &errorPtr))
-	darwinTrace("ep %s complete ptr=%p type=0x%02x data1=0x%x status=%d len=%d ok=%t state %s->%s current=%p", s.label, transfer.ptr, transfer.message.messageType(), transfer.message.data1, status, length, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	if darwinTraceEnabled {
+		darwinTrace("ep %s complete ptr=%p type=0x%02x data1=0x%x status=%d len=%d ok=%t state %s->%s current=%p", s.label, transfer.ptr, transfer.message.messageType(), transfer.message.data1, status, length, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()), unsafe.Pointer(C.box_usbhost_endpoint_sm_current_transfer(s.handle)))
+	}
 	if !ok {
 		return darwinCError(errorPtr)
 	}

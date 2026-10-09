@@ -40,9 +40,10 @@ flight. macOS sends these pauses repeatedly during enumeration.
     later without `EndpointSetNextTransfer`. The setup packet had already been
     discarded, so the worker reported success without re-issuing the request,
     and the controller faulted with `ProtocolError`.
-  - For comparison: an ep0 transfer reported as `EndpointStopped` and then
-    really re-executed on resume is accepted. Bulk endpoints get
-    `EndpointSetNextTransfer` before resuming.
+  - For comparison: in a test build, an ep0 data stage reported as
+    `EndpointStopped` was resumed the same way, also without
+    `EndpointSetNextTransfer`, and re-executing it was accepted. Bulk
+    endpoints get `EndpointSetNextTransfer` before resuming.
 - **GET_DESCRIPTOR(BOS) STALL during the pause.**
   - What happened: once ep0 waited for its in-flight request, a USB 2.0 gadget
     could STALL GET_DESCRIPTOR(BOS) during that wait. The stall completion
