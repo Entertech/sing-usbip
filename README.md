@@ -15,13 +15,72 @@ macOS could enumerate the device.
 already do. With that change, real Windows exports returned the correct 8-byte
 and 18-byte device descriptors for those devices and a HID device (2e3c:af01).
 The existing tests also passed on Windows and macOS; privileged macOS HCI tests
-were not included in that unit-test result. This confirms the Windows control
-transfer fix, not complete macOS import compatibility: macOS 26.5.1 still
-reported `IOUSBHostCIExceptionTypeProtocolError` during device configuration in
-the subsequent native import experiment. That separate issue remains open.
+were not included in that unit-test result. The macOS import failure that
+followed is covered in the next section.
 
 See [VBoxUSB control transfer direction handling](https://github.com/mirror/vbox/blob/master/src/VBox/HostDrivers/VBoxUSB/win/dev/VBoxUsbRt.cpp)
 and [usbipd-win control URB construction](https://github.com/dorssel/usbipd-win/blob/master/Usbipd/AttachedEndpoint.cs).
+
+## Entertech macOS endpoint pause fix
+
+On macOS 26.5.1 (arm64), importing the devices above through
+IOUSBHostControllerInterface failed every time with
+`IOUSBHostCIExceptionTypeProtocolError`, and later
+`IOUSBHostCIExceptionTypeCommandTimeout`, before any driver attached. The
+client ran as root with SIP disabled.
+
+Running with `SING_USBIP_DARWIN_TRACE=1` showed two causes, both in how
+endpoint 0 handled `EndpointPause` arriving while a control request was in
+flight. macOS sends these pauses repeatedly during enumeration.
+
+- **SET_CONFIGURATION status stage.**
+  - What happened: the request was UNLINKed and the status transfer completed
+    with `EndpointStopped`. The endpoint state machine keeps the stopped
+    transfer current, and the kernel resumed that same transfer about 100 ms
+    later without `EndpointSetNextTransfer`. The setup packet had already been
+    discarded, so the worker reported success without re-issuing the request,
+    and the controller faulted with `ProtocolError`.
+  - For comparison: an ep0 transfer reported as `EndpointStopped` and then
+    really re-executed on resume is accepted. Bulk endpoints get
+    `EndpointSetNextTransfer` before resuming.
+- **GET_DESCRIPTOR(BOS) STALL during the pause.**
+  - What happened: once ep0 waited for its in-flight request, a USB 2.0 gadget
+    could STALL GET_DESCRIPTOR(BOS) during that wait. The stall completion
+    halts the endpoint, and the state machine then refuses a Success response
+    to the pause. An unanswered command is fatal (`CommandTimeout`).
+
+The fix, in `endpoint_darwin.go`:
+
+- Commands are inspected before the in-flight transfer is retired, as the SDK
+  documents.
+- On ep0, a pause waits up to 500 ms for the request to finish and reports its
+  real status. If that fails, the pause falls back to UNLINK/`EndpointStopped`.
+- The setup packet is kept until the status stage completes, so a resumed
+  stopped stage re-issues the request.
+- If the endpoint halted while quiescing, the pause is answered with
+  `NotPermitted`. The kernel then follows with `EndpointReset`,
+  `EndpointSetNextTransfer` and a doorbell.
+
+Regression on real Windows exports, run twice in a row with all four devices
+imported at once:
+
+- FT232R serial port appears and receives data. Closing and reopening it,
+  which pauses and resumes bulk IN, keeps working.
+- FT2232 exposes both ports.
+- ISP gadget is listed by adb, and a 16 MiB `adb exec-out` read runs at
+  7.5-8.9 MB/s.
+- HID power supply attaches.
+
+The unpatched build reproduced the `ProtocolError` in the same setup.
+
+Known open items:
+
+- A RET_SUBMIT that arrives after CMD_UNLINK is still reported as canceled,
+  and its IN data is dropped.
+- Each endpoint keeps one URB in flight, which caps bulk throughput over
+  network latency.
+- Apple documents that the interface does not support isochronous endpoints
+  or bulk streams.
 
 Backends:
 
