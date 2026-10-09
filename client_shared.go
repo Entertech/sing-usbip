@@ -202,7 +202,19 @@ func controlHandshake(conn net.Conn) error {
 	return nil
 }
 
+// FetchControlDeviceEntries returns the devices a server exports that are
+// free to import.
 func FetchControlDeviceEntries(conn net.Conn) ([]DeviceEntry, error) {
+	devices, err := FetchControlDevices(conn)
+	if err != nil {
+		return nil, err
+	}
+	return controlDeviceInfoToEntries(devices, true), nil
+}
+
+// FetchControlDevices returns every device a server exports, including the
+// ones another client has attached.
+func FetchControlDevices(conn net.Conn) ([]ControlDeviceInfo, error) {
 	err := controlHandshake(conn)
 	if err != nil {
 		return nil, err
@@ -221,7 +233,7 @@ func FetchControlDeviceEntries(conn net.Conn) ([]DeviceEntry, error) {
 			if err != nil {
 				return nil, E.Cause(err, "read device snapshot")
 			}
-			return controlDeviceInfoToEntries(snapshot.Devices, true), nil
+			return snapshot.Devices, nil
 		case controlFramePong:
 		default:
 			return nil, E.New("unexpected control frame ", message.Frame.Type)

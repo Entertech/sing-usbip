@@ -74,6 +74,14 @@ imported at once:
 
 The unpatched build reproduced the `ProtocolError` in the same setup.
 
+## Entertech remote list shows attached devices
+
+`sing-usbip list -c` used to hide devices that another client had attached,
+so a busy device looked the same as one that was not exported. It now lists
+every export with a `STATE` column (`idle`, `attached` or `unavailable`),
+taken from the control channel snapshot. Importing is unchanged: the client
+still only imports idle devices and waits for attached ones to be released.
+
 Known open items:
 
 - A RET_SUBMIT that arrives after CMD_UNLINK is still reported as canceled,

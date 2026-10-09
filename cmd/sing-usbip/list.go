@@ -70,15 +70,15 @@ func listLocalDevices() error {
 }
 
 func listExportedDevices(ctx context.Context, remoteAddress M.Socksaddr) error {
-	entries, err := fetchControlEntries(ctx, remoteAddress)
+	devices, err := fetchControlDevices(ctx, remoteAddress)
 	if err != nil {
 		return err
 	}
-	if len(entries) == 0 {
+	if len(devices) == 0 {
 		fmt.Println("no exportable devices on " + remoteAddress.String())
 		return nil
 	}
-	return printDeviceEntries(entries)
+	return printControlDevices(devices)
 }
 
 func dialListServer(ctx context.Context, remoteAddress M.Socksaddr) (net.Conn, error) {
@@ -91,13 +91,13 @@ func dialListServer(ctx context.Context, remoteAddress M.Socksaddr) (net.Conn, e
 	return conn, nil
 }
 
-func fetchControlEntries(ctx context.Context, remoteAddress M.Socksaddr) ([]usbip.DeviceEntry, error) {
+func fetchControlDevices(ctx context.Context, remoteAddress M.Socksaddr) ([]usbip.ControlDeviceInfo, error) {
 	conn, err := dialListServer(ctx, remoteAddress)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
-	return usbip.FetchControlDeviceEntries(conn)
+	return usbip.FetchControlDevices(conn)
 }
 
 func printDeviceEntries(entries []usbip.DeviceEntry) error {
@@ -114,6 +114,26 @@ func printDeviceEntries(entries []usbip.DeviceEntry) error {
 			speedName(info.Speed)+"\t"+
 			entries[i].Serial+"\t"+
 			info.PathString())
+	}
+	return writer.Flush()
+}
+
+// printControlDevices lists a server's exports with their state, so devices
+// another client has attached show as attached instead of being hidden.
+func printControlDevices(devices []usbip.ControlDeviceInfo) error {
+	slices.SortFunc(devices, func(a, b usbip.ControlDeviceInfo) int {
+		return strings.Compare(a.BusID, b.BusID)
+	})
+	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "BUSID\tVID:PID\tNAME\tSPEED\tSERIAL\tSTATE")
+	for i := range devices {
+		device := &devices[i]
+		fmt.Fprintln(writer, device.BusID+"\t"+
+			fmt.Sprintf("%04x:%04x", device.VendorID, device.ProductID)+"\t"+
+			device.Product+"\t"+
+			speedName(device.Speed)+"\t"+
+			device.Serial+"\t"+
+			device.State.String())
 	}
 	return writer.Flush()
 }
