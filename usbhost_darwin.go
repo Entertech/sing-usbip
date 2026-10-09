@@ -300,6 +300,32 @@ func (s *darwinUSBHostEndpointSM) respond(message darwinCIMessage, status int) e
 	return nil
 }
 
+// inspect and respondInspected split respond so a command's transfer
+// completions can be enqueued between them, in the order the SDK documents
+// for EndpointPause and EndpointDestroy.
+func (s *darwinUSBHostEndpointSM) inspect(message darwinCIMessage) error {
+	cMessage := message.c()
+	var errorPtr *C.char
+	ok := bool(C.box_usbhost_endpoint_sm_inspect(s.handle, &cMessage, &errorPtr))
+	darwinTrace("ep %s inspect cmd=0x%02x ok=%t state=%s", s.label, message.messageType(), ok, darwinEndpointStateName(s.state()))
+	if !ok {
+		return darwinCError(errorPtr)
+	}
+	return nil
+}
+
+func (s *darwinUSBHostEndpointSM) respondInspected(message darwinCIMessage, status int) error {
+	cMessage := message.c()
+	var errorPtr *C.char
+	before := s.state()
+	ok := bool(C.box_usbhost_endpoint_sm_respond_inspected(s.handle, &cMessage, C.int(status), &errorPtr))
+	darwinTrace("ep %s respond cmd=0x%02x data1=0x%x status=%d ok=%t state %s->%s", s.label, message.messageType(), message.data1, status, ok, darwinEndpointStateName(before), darwinEndpointStateName(s.state()))
+	if !ok {
+		return darwinCError(errorPtr)
+	}
+	return nil
+}
+
 func (s *darwinUSBHostEndpointSM) processDoorbell(doorbell uint32) error {
 	var errorPtr *C.char
 	before := s.state()
