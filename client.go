@@ -41,7 +41,7 @@ type clientRemoteWorker struct {
 func NewClientService(ctx context.Context, options ClientOptions) (*ClientService, error) {
 	for i, deviceMatch := range options.Devices {
 		if deviceMatch.IsZero() {
-			return nil, E.New("devices[", i, "]: at least one of busid/vendor_id/product_id/serial is required")
+			return nil, E.New("devices[", i, "]: at least one of busid/vendor_id/product_id/serial/name is required")
 		}
 	}
 	if !options.ServerAddress.IsValid() {
@@ -219,10 +219,14 @@ func (c *ClientService) verifyImportedDevice(busid string, info DeviceInfoTrunca
 	snapshotKey, found := c.remoteDeviceKey(busid)
 	if found && snapshotKey.VendorID == key.VendorID && snapshotKey.ProductID == key.ProductID {
 		key.Serial = snapshotKey.Serial
+		key.Name = snapshotKey.Name
 	}
 	adjusted := expected
 	if adjusted.Serial != "" && key.Serial == "" {
 		adjusted.Serial = ""
+	}
+	if adjusted.Name != "" && key.Name == "" {
+		adjusted.Name = ""
 	}
 	if !matches(adjusted, key) {
 		return E.New("imported device vid=", fmt.Sprintf("0x%04x", key.VendorID),
@@ -244,5 +248,6 @@ func (c *ClientService) remoteDeviceKey(busid string) (DeviceKey, bool) {
 		VendorID:  device.VendorID,
 		ProductID: device.ProductID,
 		Serial:    device.Serial,
+		Name:      device.Label,
 	}, true
 }

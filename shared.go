@@ -54,5 +54,8 @@ func describeMatch(m DeviceMatch) string {
 	if m.Serial != "" {
 		parts = append(parts, "serial="+m.Serial)
 	}
+	if m.Name != "" {
+		parts = append(parts, "name="+m.Name)
+	}
 	return "{" + strings.Join(parts, ",") + "}"
 }

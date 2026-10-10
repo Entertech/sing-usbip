@@ -97,6 +97,7 @@ type ControlDeviceInfo struct {
 	Path               string                   `json:"path,omitempty"`
 	Serial             string                   `json:"serial,omitempty"`
 	Product            string                   `json:"product,omitempty"`
+	Label              string                   `json:"label,omitempty"`
 	VendorID           uint16                   `json:"vendor_id"`
 	ProductID          uint16                   `json:"product_id"`
 	BCDDevice          uint16                   `json:"bcd_device,omitempty"`
@@ -116,6 +117,7 @@ type ControlDeviceInfo struct {
 }
 
 type controlDeviceSnapshot struct {
+	Server  string              `json:"server,omitempty"`
 	Devices []ControlDeviceInfo `json:"devices"`
 }
 
@@ -281,7 +283,7 @@ func controlDeviceInfoToEntries(devices []ControlDeviceInfo, availableOnly bool)
 				BInterfaceProtocol: device.Interfaces[i].Protocol,
 			}
 		}
-		entries = append(entries, DeviceEntry{Info: info, Interfaces: interfaces, Serial: device.Serial, Product: device.Product})
+		entries = append(entries, DeviceEntry{Info: info, Interfaces: interfaces, Serial: device.Serial, Product: device.Product, Label: device.Label})
 	}
 	return entries
 }
@@ -293,6 +295,7 @@ func controlDeviceInfoEqual(a, b ControlDeviceInfo) bool {
 		a.Path != b.Path ||
 		a.Serial != b.Serial ||
 		a.Product != b.Product ||
+		a.Label != b.Label ||
 		a.VendorID != b.VendorID ||
 		a.ProductID != b.ProductID ||
 		a.BCDDevice != b.BCDDevice ||

@@ -81,6 +81,8 @@ type DeviceEntry struct {
 	Interfaces []DeviceInterface
 	Serial     string
 	Product    string
+	// Label is the server's name for the device, from the control channel.
+	Label string
 }
 
 func WriteOpHeader(w io.Writer, code uint16, status uint32) error {
@@ -244,5 +246,6 @@ func entryDeviceKey(entry DeviceEntry) DeviceKey {
 		VendorID:  entry.Info.IDVendor,
 		ProductID: entry.Info.IDProduct,
 		Serial:    entry.Serial,
+		Name:      entry.Label,
 	}
 }

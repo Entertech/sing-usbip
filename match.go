@@ -9,6 +9,7 @@ type DeviceKey struct {
 	VendorID  uint16
 	ProductID uint16
 	Serial    string
+	Name      string
 }
 
 func matches(m DeviceMatch, d DeviceKey) bool {
@@ -27,7 +28,20 @@ func matches(m DeviceMatch, d DeviceKey) bool {
 	if m.Serial != "" && m.Serial != d.Serial {
 		return false
 	}
+	if m.Name != "" && m.Name != d.Name {
+		return false
+	}
 	return true
+}
+
+// withoutNames drops the labels, for matching local devices that have none.
+func withoutNames(patterns []DeviceMatch) []DeviceMatch {
+	out := make([]DeviceMatch, len(patterns))
+	for i, pattern := range patterns {
+		pattern.Name = ""
+		out[i] = pattern
+	}
+	return out
 }
 
 func SelectMatches(patterns []DeviceMatch, keys []DeviceKey) []int {

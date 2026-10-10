@@ -12,8 +12,10 @@ import (
 )
 
 const deviceMatchSyntax = "Device match syntax (comma-separated criteria, all must match):\n" +
-	"  busid=1-1.2  vendor_id=0x0bda  product_id=0x8153  serial=001000001\n" +
-	"A bare value is a busid; vvvv:pppp is shorthand for vendor_id:product_id."
+	"  busid=1-1.2  vendor_id=0x0bda  product_id=0x8153  serial=001000001  name=isp\n" +
+	"A bare value is a busid; vvvv:pppp is shorthand for vendor_id:product_id.\n" +
+	"On a server, name labels the matched devices for clients; a client can\n" +
+	"import by name alone."
 
 func parseDeviceMatches(values []string) ([]usbip.DeviceMatch, error) {
 	matches := make([]usbip.DeviceMatch, 0, len(values))
@@ -80,6 +82,8 @@ func setDeviceMatchField(match *usbip.DeviceMatch, key string, value string) err
 		match.ProductID = productID
 	case "serial":
 		match.Serial = value
+	case "name":
+		match.Name = value
 	default:
 		return E.New("unknown device match key: ", key)
 	}
@@ -110,6 +114,9 @@ func formatDeviceMatch(match usbip.DeviceMatch) string {
 	}
 	if match.Serial != "" {
 		parts = append(parts, "serial="+match.Serial)
+	}
+	if match.Name != "" {
+		parts = append(parts, "name="+match.Name)
 	}
 	return strings.Join(parts, ",")
 }

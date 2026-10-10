@@ -15,7 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var deviceMatches []string
+var (
+	deviceMatches []string
+	serverName    string
+)
 
 var runCommand = &cobra.Command{
 	Use:   "run",
@@ -30,6 +33,7 @@ var runCommand = &cobra.Command{
 
 func init() {
 	runCommand.Flags().StringArrayVarP(&deviceMatches, "device", "d", nil, "device to export or import (repeatable)")
+	runCommand.Flags().StringVar(&serverName, "name", "", "server name shown to clients (default: host name)")
 	mainCommand.AddCommand(runCommand)
 }
 
@@ -58,8 +62,13 @@ func runServer(ctx context.Context, devices []usbip.DeviceMatch) error {
 	if err != nil {
 		return err
 	}
+	name := serverName
+	if name == "" {
+		name, _ = os.Hostname()
+	}
 	service, err := usbip.NewServerService(ctx, usbip.ServerOptions{
 		Logger:        log.StdLogger(),
+		Name:          name,
 		Devices:       devices,
 		ListenAddress: listenAddress,
 	})

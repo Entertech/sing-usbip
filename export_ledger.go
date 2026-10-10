@@ -25,6 +25,9 @@ type exportLedger struct {
 	inventoryAccess sync.Mutex
 	exports         map[string]Export
 	busy            map[string]bool
+
+	serverName string
+	labels     []DeviceMatch
 }
 
 type exportSubscriber struct {
@@ -35,9 +38,11 @@ type exportSubscriber struct {
 
 const controlSubscriberSendBuffer = 16
 
-func newExportLedger(logger logger.ContextLogger) *exportLedger {
+func newExportLedger(logger logger.ContextLogger, serverName string, labels []DeviceMatch) *exportLedger {
 	return &exportLedger{
 		logger:         logger,
+		serverName:     serverName,
+		labels:         labels,
 		subs:           make(map[uint64]*exportSubscriber),
 		state:          make(map[string]ControlDeviceInfo),
 		stateListeners: make(map[uint64]func([]ControlDeviceInfo)),
@@ -117,7 +122,7 @@ func (l *exportLedger) BroadcastIfChanged() bool {
 	l.state = nextState
 	devices := sortedControlDeviceInfoValues(nextState)
 	frame := controlFrame{Type: controlFrameDeviceSnapshot, Version: controlProtocolVersion}
-	payload := controlDeviceSnapshot{Devices: devices}
+	payload := controlDeviceSnapshot{Server: l.serverName, Devices: devices}
 	for _, sub := range l.subs {
 		l.enqueuePayload(sub, frame, payload)
 	}
@@ -197,7 +202,7 @@ func (l *exportLedger) Subscribe(conn net.Conn) *exportSubscriber {
 	l.enqueuePayload(sub, controlFrame{
 		Type:    controlFrameDeviceSnapshot,
 		Version: controlProtocolVersion,
-	}, controlDeviceSnapshot{Devices: sortedControlDeviceInfoValues(l.state)})
+	}, controlDeviceSnapshot{Server: l.serverName, Devices: sortedControlDeviceInfoValues(l.state)})
 	l.subs[sub.id] = sub
 	return sub
 }
@@ -250,9 +255,27 @@ func (l *exportLedger) snapshotDeviceState() []ControlDeviceInfo {
 		if snapshot.State == DeviceStateUnavailable && snapshot.Entry.Info.BusIDString() == "" {
 			continue
 		}
-		out = append(out, controlDeviceInfoFromEntry(snapshot.Entry, snapshot.Backend, snapshot.StableID, snapshot.State, snapshot.RawStatus, snapshot.StatusReason))
+		info := controlDeviceInfoFromEntry(snapshot.Entry, snapshot.Backend, snapshot.StableID, snapshot.State, snapshot.RawStatus, snapshot.StatusReason)
+		info.Label = l.labelFor(snapshot.Entry)
+		out = append(out, info)
 	}
 	return out
+}
+
+// labelFor returns the name of the first labelled match that selects entry.
+func (l *exportLedger) labelFor(entry DeviceEntry) string {
+	key := entryDeviceKey(entry)
+	for _, label := range l.labels {
+		if label.Name == "" {
+			continue
+		}
+		name := label.Name
+		label.Name = ""
+		if matches(label, key) {
+			return name
+		}
+	}
+	return ""
 }
 
 func (l *exportLedger) enqueueFrame(sub *exportSubscriber, frame controlFrame) {

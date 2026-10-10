@@ -215,28 +215,34 @@ func FetchControlDeviceEntries(conn net.Conn) ([]DeviceEntry, error) {
 // FetchControlDevices returns every device a server exports, including the
 // ones another client has attached.
 func FetchControlDevices(conn net.Conn) ([]ControlDeviceInfo, error) {
+	_, devices, err := FetchControlSnapshot(conn)
+	return devices, err
+}
+
+// FetchControlSnapshot returns the server's name and every device it exports.
+func FetchControlSnapshot(conn net.Conn) (string, []ControlDeviceInfo, error) {
 	err := controlHandshake(conn)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var reader controlReader
 	for {
 		var message controlMessage
 		message, err = reader.read(conn)
 		if err != nil {
-			return nil, E.Cause(err, "read control frame")
+			return "", nil, E.Cause(err, "read control frame")
 		}
 		switch message.Frame.Type {
 		case controlFrameDeviceSnapshot:
 			var snapshot controlDeviceSnapshot
 			err = unmarshalControlPayload(message.Payload, &snapshot)
 			if err != nil {
-				return nil, E.Cause(err, "read device snapshot")
+				return "", nil, E.Cause(err, "read device snapshot")
 			}
-			return snapshot.Devices, nil
+			return snapshot.Server, snapshot.Devices, nil
 		case controlFramePong:
 		default:
-			return nil, E.New("unexpected control frame ", message.Frame.Type)
+			return "", nil, E.New("unexpected control frame ", message.Frame.Type)
 		}
 	}
 }
@@ -294,6 +300,7 @@ func (c *ClientService) applyRemoteDeviceState(devices []ControlDeviceInfo) {
 			VendorID:  device.VendorID,
 			ProductID: device.ProductID,
 			Serial:    device.Serial,
+			Name:      device.Label,
 		}
 	}
 	c.applyMatchedExportsWithRetained(availableEntries, knownKeys)

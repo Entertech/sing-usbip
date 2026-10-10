@@ -39,7 +39,7 @@ func NewServerService(ctx context.Context, options ServerOptions) (*ServerServic
 		return nil, E.New("devices: at least one match is required")
 	}
 	for i, deviceMatch := range options.Devices {
-		if deviceMatch.IsZero() {
+		if !deviceMatch.selectsDevice() {
 			return nil, E.New("devices[", i, "]: at least one of busid/vendor_id/product_id/serial is required")
 		}
 	}
@@ -48,7 +48,7 @@ func NewServerService(ctx context.Context, options ServerOptions) (*ServerServic
 		serviceLogger = logger.NOP()
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	host, err := newPlatformExportHost(ctx, serviceLogger, options.Devices)
+	host, err := newPlatformExportHost(ctx, serviceLogger, withoutNames(options.Devices))
 	if err != nil {
 		cancel()
 		return nil, err
@@ -65,7 +65,7 @@ func newServerServiceWithHost(ctx context.Context, cancel context.CancelFunc, se
 		listenAddress: options.ListenAddress,
 		matches:       options.Devices,
 		host:          host,
-		ledger:        newExportLedger(serviceLogger),
+		ledger:        newExportLedger(serviceLogger, options.Name, options.Devices),
 		sessions:      make(map[DataSession]struct{}),
 	}
 }

@@ -74,6 +74,24 @@ imported at once:
 
 The unpatched build reproduced the `ProtocolError` in the same setup.
 
+## Entertech device labels and server name
+
+Bench tooling needed device names that live with the server, not in every
+client's configuration.
+
+- A device match takes `name=<label>`, for example
+  `-d 3-3,1d6b:0102,name=isp`.
+  - On a server, the label is attached to the exports the match selects and
+    published in the control snapshot (`label`). The server ignores it when
+    matching local devices.
+  - On a client, `-d name=isp` imports by label alone.
+- `run -s … --name <server>` names the server; it defaults to the host name.
+  The name is sent in the snapshot as `server`.
+- `list -c` prints the server name and a `LABEL` column. `--json` prints the
+  same data for scripts.
+
+Both fields are optional JSON members, so older clients ignore them.
+
 ## Entertech Windows export reports absent devices
 
 When a Windows export's device left the bus while a client was importing it,

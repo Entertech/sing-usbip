@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -36,7 +37,10 @@ var listCommand = &cobra.Command{
 	Args: cobra.NoArgs,
 }
 
+var listJSON bool
+
 func init() {
+	listCommand.Flags().BoolVar(&listJSON, "json", false, "with --client, print the server name and devices as JSON")
 	mainCommand.AddCommand(listCommand)
 }
 
@@ -70,9 +74,15 @@ func listLocalDevices() error {
 }
 
 func listExportedDevices(ctx context.Context, remoteAddress M.Socksaddr) error {
-	devices, err := fetchControlDevices(ctx, remoteAddress)
+	server, devices, err := fetchControlSnapshot(ctx, remoteAddress)
 	if err != nil {
 		return err
+	}
+	if listJSON {
+		return printControlDevicesJSON(server, devices)
+	}
+	if server != "" {
+		fmt.Println("server " + server)
 	}
 	if len(devices) == 0 {
 		fmt.Println("no exportable devices on " + remoteAddress.String())
@@ -91,13 +101,13 @@ func dialListServer(ctx context.Context, remoteAddress M.Socksaddr) (net.Conn, e
 	return conn, nil
 }
 
-func fetchControlDevices(ctx context.Context, remoteAddress M.Socksaddr) ([]usbip.ControlDeviceInfo, error) {
+func fetchControlSnapshot(ctx context.Context, remoteAddress M.Socksaddr) (string, []usbip.ControlDeviceInfo, error) {
 	conn, err := dialListServer(ctx, remoteAddress)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	defer conn.Close()
-	return usbip.FetchControlDevices(conn)
+	return usbip.FetchControlSnapshot(conn)
 }
 
 func printDeviceEntries(entries []usbip.DeviceEntry) error {
@@ -125,17 +135,53 @@ func printControlDevices(devices []usbip.ControlDeviceInfo) error {
 		return strings.Compare(a.BusID, b.BusID)
 	})
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "BUSID\tVID:PID\tNAME\tSPEED\tSERIAL\tSTATE")
+	fmt.Fprintln(writer, "BUSID\tVID:PID\tLABEL\tNAME\tSPEED\tSERIAL\tSTATE")
 	for i := range devices {
 		device := &devices[i]
 		fmt.Fprintln(writer, device.BusID+"\t"+
 			fmt.Sprintf("%04x:%04x", device.VendorID, device.ProductID)+"\t"+
+			device.Label+"\t"+
 			device.Product+"\t"+
 			speedName(device.Speed)+"\t"+
 			device.Serial+"\t"+
 			device.State.String())
 	}
 	return writer.Flush()
+}
+
+type listedDevice struct {
+	BusID   string `json:"busid"`
+	VIDPID  string `json:"vid_pid"`
+	Label   string `json:"label,omitempty"`
+	Product string `json:"product,omitempty"`
+	Serial  string `json:"serial,omitempty"`
+	Speed   string `json:"speed"`
+	State   string `json:"state"`
+}
+
+func printControlDevicesJSON(server string, devices []usbip.ControlDeviceInfo) error {
+	slices.SortFunc(devices, func(a, b usbip.ControlDeviceInfo) int {
+		return strings.Compare(a.BusID, b.BusID)
+	})
+	listed := make([]listedDevice, len(devices))
+	for i := range devices {
+		device := &devices[i]
+		listed[i] = listedDevice{
+			BusID:   device.BusID,
+			VIDPID:  fmt.Sprintf("%04x:%04x", device.VendorID, device.ProductID),
+			Label:   device.Label,
+			Product: device.Product,
+			Serial:  device.Serial,
+			Speed:   speedName(device.Speed),
+			State:   device.State.String(),
+		}
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(struct {
+		Server  string         `json:"server,omitempty"`
+		Devices []listedDevice `json:"devices"`
+	}{server, listed})
 }
 
 func speedName(speed uint32) string {
