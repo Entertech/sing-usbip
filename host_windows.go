@@ -282,10 +282,18 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 		if _, ok := desired[busid]; ok {
 			continue
 		}
+		info, isPresent := present[busid]
+		if !isPresent {
+			export.markAbsent()
+		}
 		if isReserved(busid) {
+			if !isPresent && (graceRecheck == 0 || windowsExportAbsenceGrace < graceRecheck) {
+				// The import holding the reservation fails without the
+				// device; look again once it is released.
+				graceRecheck = windowsExportAbsenceGrace
+			}
 			continue
 		}
-		info, isPresent := present[busid]
 		if !isPresent {
 			remaining := windowsExportAbsenceGrace - now.Sub(export.seenAt())
 			if remaining > 0 {
@@ -441,6 +449,7 @@ type windowsExport struct {
 	lastSeen          time.Time
 	currentInstanceID string
 	seenCaptured      bool
+	absent            bool
 }
 
 func (e *windowsExport) setDevice(device *vboxusb.Device) {
@@ -463,6 +472,15 @@ func (e *windowsExport) markSeen(now time.Time, instanceID string, captured bool
 	e.lastSeen = now
 	e.currentInstanceID = instanceID
 	e.seenCaptured = captured
+	e.absent = false
+	e.stateAccess.Unlock()
+}
+
+// markAbsent reports the export unavailable while its device is off the bus,
+// so clients stop importing it instead of failing until it is released.
+func (e *windowsExport) markAbsent() {
+	e.stateAccess.Lock()
+	e.absent = true
 	e.stateAccess.Unlock()
 }
 
@@ -529,15 +547,24 @@ func (e *windowsExport) BusID() string {
 }
 
 func (e *windowsExport) Snapshot(busy bool) ExportSnapshot {
+	e.stateAccess.Lock()
+	absent := e.absent
+	e.stateAccess.Unlock()
 	state := DeviceStateIdle
-	if busy {
+	var reason string
+	switch {
+	case absent:
+		state = DeviceStateUnavailable
+		reason = "device not present"
+	case busy:
 		state = DeviceStateAttached
 	}
 	return ExportSnapshot{
-		Entry:    e.entry,
-		Backend:  BackendIDWindowsVBoxUSB,
-		StableID: "windows-instance:" + e.info.InstanceID,
-		State:    state,
+		Entry:        e.entry,
+		Backend:      BackendIDWindowsVBoxUSB,
+		StableID:     "windows-instance:" + e.info.InstanceID,
+		State:        state,
+		StatusReason: reason,
 	}
 }
 

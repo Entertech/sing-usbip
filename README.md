@@ -74,6 +74,21 @@ imported at once:
 
 The unpatched build reproduced the `ProtocolError` in the same setup.
 
+## Entertech Windows export reports absent devices
+
+When a Windows export's device left the bus while a client was importing it,
+`Reconcile` skipped the reserved export and scheduled no recheck. The export
+stayed listed as `idle` indefinitely, and every import waited 10 s for a
+VBoxUSB interface that never appeared. This was seen with an ISP gadget that
+powered down.
+
+An export whose device is absent is now reported `unavailable` ("device not
+present"), so clients stop importing it. A reserved absent export gets a
+recheck, which releases it after the existing 10 s absence grace. On a real
+Windows export, powering the gadget off showed `unavailable` within 2 s, and
+the export was released after 10 s with no rejected imports. Powering it back
+on re-captured the device, and the client re-attached about 12 s later.
+
 ## Entertech remote list shows attached devices
 
 `sing-usbip list -c` used to hide devices that another client had attached,
