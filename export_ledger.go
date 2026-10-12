@@ -80,6 +80,17 @@ func (l *exportLedger) IsReserved(busid string) bool {
 	return reserved
 }
 
+// HasExport reports whether busid is still served by export, and not by an
+// export the host created after releasing it.
+func (l *exportLedger) HasExport(busid string, export Export) bool {
+	var same bool
+	l.withInventoryRead(func() {
+		current, found := l.exports[busid]
+		same = found && current == export
+	})
+	return same
+}
+
 func (l *exportLedger) AvailableExports() []Export {
 	var out []Export
 	l.withInventoryRead(func() {
