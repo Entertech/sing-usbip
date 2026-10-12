@@ -600,5 +600,9 @@ func (e *windowsExport) NewServerDataSession(ctx context.Context, conn net.Conn)
 		return nil, E.New("windows usbip: device ", e.info.BusID, " is already claimed by another handle")
 	}
 	e.setDevice(device)
-	return newUserspaceURBSession(ctx, e.logger, conn, newVBoxUSBEngine(device)), nil
+	policy := serialReadAheadPolicy(e.info.VendorID, windowsSpeedToProtocol(e.info.Speed))
+	if policy != nil {
+		e.logger.Info("serial read-ahead on for ", e.info.BusID)
+	}
+	return newUserspaceURBSession(ctx, e.logger, conn, newVBoxUSBEngine(device)).withReadAhead(policy), nil
 }
