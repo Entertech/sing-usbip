@@ -22,7 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch) (ExportHost, error) {
+func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch, _ exportHostOptions) (ExportHost, error) {
 	return newLinuxExportHost(ctx, logger, matches), nil
 }
 

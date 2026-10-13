@@ -14,7 +14,7 @@ import (
 	"github.com/sagernet/sing/common/logger"
 )
 
-func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch) (ExportHost, error) {
+func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch, _ exportHostOptions) (ExportHost, error) {
 	return newDarwinExportHost(ctx, logger, matches), nil
 }
 

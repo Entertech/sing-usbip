@@ -15,8 +15,8 @@ import (
 	"github.com/sagernet/sing/common/logger"
 )
 
-func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch) (ExportHost, error) {
-	return newWindowsExportHost(ctx, logger, matches), nil
+func newPlatformExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch, options exportHostOptions) (ExportHost, error) {
+	return newWindowsExportHost(ctx, logger, matches, options), nil
 }
 
 func ListLocalDevices() ([]LocalDeviceInfo, error) {
@@ -54,9 +54,19 @@ type windowsExportHost struct {
 	filters      map[string]uint64
 	eventsCh     chan struct{}
 	recheckTimer *time.Timer
+
+	// memory and armed keep the identities seen on port-only busids captured
+	// as they enumerate, one VBoxUSBMon filter each for the server's lifetime.
+	memory *captureMemory
+	armed  map[armedIdentity]uint64
 }
 
-func newWindowsExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch) *windowsExportHost {
+type armedIdentity struct {
+	busid    string
+	identity deviceIdentity
+}
+
+func newWindowsExportHost(ctx context.Context, logger logger.ContextLogger, matches []DeviceMatch, options exportHostOptions) *windowsExportHost {
 	runCtx, runCancel := context.WithCancel(ctx)
 	return &windowsExportHost{
 		logger:    logger,
@@ -65,6 +75,8 @@ func newWindowsExportHost(ctx context.Context, logger logger.ContextLogger, matc
 		runCancel: runCancel,
 		exports:   make(map[string]*windowsExport),
 		filters:   make(map[string]uint64),
+		memory:    newCaptureMemory(options.captureMemoryPath),
+		armed:     make(map[armedIdentity]uint64),
 	}
 }
 
@@ -92,7 +104,74 @@ func (h *windowsExportHost) Start() error {
 	}
 	h.logger.Info("VBoxUSBMon ", major, ".", minor, " ready")
 	h.monitor = monitor
+	err = h.memory.load()
+	if err != nil {
+		// Losing the memory only costs the early capture of each identity once.
+		h.logger.Warn(err)
+	}
+	for _, busid := range h.memory.busIDs() {
+		if !portOnlyRule(h.matches, busid) {
+			continue
+		}
+		for _, identity := range h.memory.identities(busid) {
+			h.arm(monitor, busid, identity)
+		}
+	}
 	return nil
+}
+
+// arm keeps a VBoxUSBMon filter for identity on busid's hub port, so the
+// device is captured when it enumerates, before Windows binds its own driver.
+func (h *windowsExportHost) arm(monitor *vboxusb.Monitor, busid string, identity deviceIdentity) {
+	if monitor == nil {
+		return
+	}
+	key := armedIdentity{busid: busid, identity: identity}
+	h.access.Lock()
+	_, armed := h.armed[key]
+	h.access.Unlock()
+	if armed {
+		return
+	}
+	port, ok := busIDPort(busid)
+	if !ok {
+		return
+	}
+	vendor, product := identity.VendorID, identity.ProductID
+	id, err := monitor.AddFilter(vboxusb.Filter{VendorID: &vendor, ProductID: &product, Port: &port})
+	if err != nil {
+		h.logger.Warn("ADD_FILTER for ", identity, " on ", busid, ": ", err)
+		return
+	}
+	h.access.Lock()
+	h.armed[key] = id
+	h.access.Unlock()
+	h.logger.Info("capturing ", identity, " on ", busid, " as it enumerates")
+}
+
+// rememberAndArm records the identity of a device exported by a port-only rule
+// and arms its capture, so the next time the port switches to it (a board
+// entering its bootloader) no Windows driver touches it first.
+func (h *windowsExportHost) rememberAndArm(monitor *vboxusb.Monitor, busid string, info vboxusb.USBDeviceInfo) {
+	if info.IdentityIsStub() {
+		return
+	}
+	identity := deviceIdentity{VendorID: info.VendorID, ProductID: info.ProductID}
+	_, err := h.memory.remember(busid, identity)
+	if err != nil {
+		h.logger.Warn(err)
+	}
+	h.arm(monitor, busid, identity)
+}
+
+// captureFilterFor adds the capture filter for a newly exported device: an
+// armed identity filter on port-only busids, a per-device filter otherwise.
+func (h *windowsExportHost) captureFilterFor(monitor *vboxusb.Monitor, busid string, info vboxusb.USBDeviceInfo) {
+	if portOnlyRule(h.matches, busid) {
+		h.rememberAndArm(monitor, busid, info)
+		return
+	}
+	h.addFilter(monitor, busid, info)
 }
 
 func (h *windowsExportHost) Close() error {
@@ -102,6 +181,8 @@ func (h *windowsExportHost) Close() error {
 	h.monitor = nil
 	filters := h.filters
 	h.filters = make(map[string]uint64)
+	armed := h.armed
+	h.armed = make(map[armedIdentity]uint64)
 	exports := h.exports
 	h.exports = make(map[string]*windowsExport)
 	h.access.Unlock()
@@ -127,6 +208,18 @@ func (h *windowsExportHost) Close() error {
 					h.logger.Debug("remove filter for ", busid, ": ", err)
 				}
 			}
+			// The armed filters go too, or the restart would capture the
+			// device again instead of handing it back to Windows.
+			for key, id := range armed {
+				if key.busid != busid {
+					continue
+				}
+				delete(armed, key)
+				err := monitor.RemoveFilter(id)
+				if err != nil {
+					h.logger.Debug("remove filter for ", key.identity, " on ", busid, ": ", err)
+				}
+			}
 		}
 		if restart != nil {
 			restart.Finish()
@@ -137,6 +230,12 @@ func (h *windowsExportHost) Close() error {
 			err := monitor.RemoveFilter(id)
 			if err != nil {
 				h.logger.Debug("remove filter for ", busid, ": ", err)
+			}
+		}
+		for key, id := range armed {
+			err := monitor.RemoveFilter(id)
+			if err != nil {
+				h.logger.Debug("remove filter for ", key.identity, " on ", key.busid, ": ", err)
 			}
 		}
 		_ = monitor.Close()
@@ -257,7 +356,10 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 		if export, found := current[busid]; found {
 			if !info.IdentityIsStub() && (info.VendorID != export.info.VendorID || info.ProductID != export.info.ProductID) {
 				h.logger.Warn("device at ", busid, " changed identity; re-exporting")
-				h.releaseDevice(monitor, busid, export, info, true)
+				// On a port-only busid the new device is exported next; giving
+				// it back to Windows first would only bounce it through its
+				// Windows driver.
+				h.releaseDevice(monitor, busid, export, info, !portOnlyRule(h.matches, busid))
 				delete(current, busid)
 				released = append(released, busid)
 			} else {
@@ -270,7 +372,7 @@ func (h *windowsExportHost) Reconcile(isReserved func(busid string) bool) (map[s
 		if info.Captured {
 			// The VBoxUSB device binding outlives the process that
 			// created it, while the VBoxUSBMon filter does not.
-			h.addFilter(monitor, busid, info)
+			h.captureFilterFor(monitor, busid, info)
 			h.logger.Info("adopted already-captured ", busid, " (vid=", fmt.Sprintf("0x%04x", info.VendorID), " pid=", fmt.Sprintf("0x%04x", info.ProductID), ")")
 		} else {
 			h.captureDevice(monitor, busid, info)
@@ -355,7 +457,7 @@ func (h *windowsExportHost) captureDevice(monitor *vboxusb.Monitor, busid string
 	if err != nil {
 		h.logger.Warn("restart ", busid, " for capture: ", err)
 	}
-	h.addFilter(monitor, busid, info)
+	h.captureFilterFor(monitor, busid, info)
 	if restart != nil {
 		restart.Finish()
 	}

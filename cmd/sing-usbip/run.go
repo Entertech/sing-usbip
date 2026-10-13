@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	deviceMatches []string
-	serverName    string
+	deviceMatches     []string
+	serverName        string
+	captureMemoryPath string
 )
 
 var runCommand = &cobra.Command{
@@ -34,6 +35,7 @@ var runCommand = &cobra.Command{
 func init() {
 	runCommand.Flags().StringArrayVarP(&deviceMatches, "device", "d", nil, "device to export or import (repeatable)")
 	runCommand.Flags().StringVar(&serverName, "name", "", "server name shown to clients (default: host name)")
+	runCommand.Flags().StringVar(&captureMemoryPath, "capture-memory", "", "Windows server: file remembering the identities seen on port-only rules, so those devices are captured as they enumerate")
 	mainCommand.AddCommand(runCommand)
 }
 
@@ -67,10 +69,11 @@ func runServer(ctx context.Context, devices []usbip.DeviceMatch) error {
 		name, _ = os.Hostname()
 	}
 	service, err := usbip.NewServerService(ctx, usbip.ServerOptions{
-		Logger:        log.StdLogger(),
-		Name:          name,
-		Devices:       devices,
-		ListenAddress: listenAddress,
+		Logger:            log.StdLogger(),
+		Name:              name,
+		Devices:           devices,
+		ListenAddress:     listenAddress,
+		CaptureMemoryPath: captureMemoryPath,
 	})
 	if err != nil {
 		return err

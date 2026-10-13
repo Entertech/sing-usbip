@@ -16,7 +16,7 @@ import (
 	"github.com/sagernet/sing/common/logger"
 )
 
-func newPlatformExportHost(_ context.Context, _ logger.ContextLogger, _ []DeviceMatch) (ExportHost, error) {
+func newPlatformExportHost(_ context.Context, _ logger.ContextLogger, _ []DeviceMatch, _ exportHostOptions) (ExportHost, error) {
 	return nil, E.New("usbip host backend is only available on macOS")
 }
 

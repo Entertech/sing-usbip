@@ -59,7 +59,7 @@ func NewServerService(ctx context.Context, options ServerOptions) (*ServerServic
 		serviceLogger = logger.NOP()
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	host, err := newPlatformExportHost(ctx, serviceLogger, withoutNames(options.Devices))
+	host, err := newPlatformExportHost(ctx, serviceLogger, withoutNames(options.Devices), exportHostOptions{captureMemoryPath: options.CaptureMemoryPath})
 	if err != nil {
 		cancel()
 		return nil, err
