@@ -114,6 +114,14 @@ func (e *vboxusbEngine) controlSubmit(req URBRequest) URBResponse {
 
 func (e *vboxusbEngine) bulkSubmit(req URBRequest, transferType vboxusb.TransferType) URBResponse {
 	command := req.Command
+	if len(req.Buffer) == 0 {
+		// VBoxUSB cannot send a zero-length transfer: vboxUsbRtUrbSend builds an
+		// MDL for the buffer unconditionally and MmProbeAndLockPages faults on an
+		// empty one, which surfaces as ERROR_NOACCESS and used to tear the session
+		// down on every zero-length packet adb writes after a whole number of
+		// max-size packets. Complete it here; the device does not see the ZLP.
+		return URBResponse{}
+	}
 	urb := &vboxusb.URB{
 		Type:      transferType,
 		Endpoint:  uint32(req.Endpoint & 0x0f),

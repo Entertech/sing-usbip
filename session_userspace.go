@@ -49,6 +49,8 @@ type userspaceURBSession struct {
 	closed      bool
 	closeOnce   sync.Once
 	closeErr    error
+
+	readAhead *sessionReadAhead
 }
 
 type userspaceSubmitState struct {
@@ -81,6 +83,15 @@ func newUserspaceURBSession(ctx context.Context, logger logger.ContextLogger, co
 		endpoints: make(map[uint8]*userspaceEndpointState),
 		done:      make(chan struct{}),
 	}
+}
+
+// withReadAhead turns on serial read-ahead (see session_readahead.go) when
+// policy is not nil. Call it before Start.
+func (s *userspaceURBSession) withReadAhead(policy *readAheadPolicy) *userspaceURBSession {
+	if policy != nil {
+		s.readAhead = newSessionReadAhead(s, *policy)
+	}
+	return s
 }
 
 func (s *userspaceURBSession) Done() <-chan struct{} {
@@ -187,6 +198,12 @@ func (s *userspaceURBSession) serve() error {
 			status := int32(0)
 			endpoint, drained, shouldAbort, found := s.unlinkSubmit(command.SeqNum)
 			if found {
+				if shouldAbort && s.readAhead.owns(endpoint) {
+					// The submit only waits for queued data; the device read
+					// belongs to the reader and must not be aborted.
+					s.readAhead.cancelWait(endpoint)
+					shouldAbort = false
+				}
 				if shouldAbort {
 					abortErr := s.engine.AbortEndpoint(endpoint)
 					if abortErr != nil {
@@ -267,6 +284,9 @@ func (s *userspaceURBSession) startSubmit(next userspaceNextSubmit) {
 			response, submitErr = s.handleSubmit(next.command)
 		}
 		shouldSend, followUp, hasFollowUp := s.finishSubmit(next.sequence)
+		if !shouldSend && entered && submitErr == nil && s.readAhead.handles(next.command) {
+			s.readAhead.requeue(commandEndpoint(next.command), response)
+		}
 		if shouldSend && entered {
 			s.writeAccess.Lock()
 			err := WriteSubmitResponse(s.conn, response)
@@ -325,6 +345,12 @@ func (s *userspaceURBSession) awaitDrained(endpoint uint8, drained <-chan struct
 }
 
 func (s *userspaceURBSession) handleSubmit(command SubmitCommand) (SubmitResponse, error) {
+	if s.readAhead.handles(command) {
+		return s.readAhead.take(command), nil
+	}
+	if command.Header.Endpoint == 0 {
+		s.readAhead.beforeControl(command.Setup)
+	}
 	response := SubmitResponse{
 		Header: DataHeader{
 			Command:   RetSubmit,
@@ -350,7 +376,8 @@ func (s *userspaceURBSession) handleSubmit(command SubmitCommand) (SubmitRespons
 	})
 	if result.Error != nil {
 		response.Status = usbipStatusEIO
-		return response, E.Cause(result.Error, "submit seq ", command.Header.SeqNum, " endpoint ", fmt.Sprintf("0x%02x", endpoint))
+		return response, E.Cause(result.Error, "submit seq ", command.Header.SeqNum, " endpoint ", fmt.Sprintf("0x%02x", endpoint),
+			" length ", len(buffer), " flags ", fmt.Sprintf("0x%x", command.TransferFlags))
 	}
 	response.Status = result.Status
 	if result.IsoPackets != nil {
@@ -492,6 +519,7 @@ func (s *userspaceURBSession) finishSubmit(seq uint32) (bool, userspaceNextSubmi
 }
 
 func (s *userspaceURBSession) drainSubmits() {
+	s.readAhead.close()
 	s.abortPendingSubmits()
 	waitDone := make(chan struct{})
 	go func() {

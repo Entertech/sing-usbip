@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,8 +31,18 @@ type ServerService struct {
 	reconcileAccess sync.Mutex
 
 	sessionsAccess sync.Mutex
-	sessions       map[DataSession]struct{}
+	sessions       map[DataSession]*serverImport
 	sessionsClosed bool
+}
+
+// serverImport is one running import session and the busid it holds.
+type serverImport struct {
+	busid  string
+	export Export
+	// released is set when the host released the export under the session
+	// (the device left, or came back with another identity): the session is
+	// closed, and its busid may already belong to a new export.
+	released bool
 }
 
 func NewServerService(ctx context.Context, options ServerOptions) (*ServerService, error) {
@@ -48,7 +59,7 @@ func NewServerService(ctx context.Context, options ServerOptions) (*ServerServic
 		serviceLogger = logger.NOP()
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	host, err := newPlatformExportHost(ctx, serviceLogger, withoutNames(options.Devices))
+	host, err := newPlatformExportHost(ctx, serviceLogger, withoutNames(options.Devices), exportHostOptions{captureMemoryPath: options.CaptureMemoryPath})
 	if err != nil {
 		cancel()
 		return nil, err
@@ -66,7 +77,7 @@ func newServerServiceWithHost(ctx context.Context, cancel context.CancelFunc, se
 		matches:       options.Devices,
 		host:          host,
 		ledger:        newExportLedger(serviceLogger, options.Name, options.Devices),
-		sessions:      make(map[DataSession]struct{}),
+		sessions:      make(map[DataSession]*serverImport),
 	}
 }
 
@@ -196,6 +207,30 @@ func (s *ServerService) tearDownPreparedSession(busid string, session DataSessio
 	}
 }
 
+// closeReleasedImports ends the import sessions whose export the host just
+// released. Without this a session survives its device: when no URB is in
+// flight nothing fails, the client keeps waiting on the dead session, and the
+// busid is advertised idle again, so the client never re-imports it.
+func (s *ServerService) closeReleasedImports(released []string) {
+	if len(released) == 0 {
+		return
+	}
+	var sessions []DataSession
+	s.sessionsAccess.Lock()
+	for session, entry := range s.sessions {
+		if entry.released || !slices.Contains(released, entry.busid) {
+			continue
+		}
+		entry.released = true
+		sessions = append(sessions, session)
+		s.logger.Warn("closing import session for ", entry.busid, ": its export was released")
+	}
+	s.sessionsAccess.Unlock()
+	for _, session := range sessions {
+		go session.Close()
+	}
+}
+
 func (s *ServerService) finishImport(busid string) bool {
 	s.reconcileAccess.Lock()
 	defer s.reconcileAccess.Unlock()
@@ -215,6 +250,7 @@ func (s *ServerService) reconcileAndBroadcast(notify bool) error {
 	}
 	snapshot, released, err := s.host.Reconcile(s.ledger.IsReserved)
 	s.ledger.ApplyHostSnapshot(snapshot, released)
+	s.closeReleasedImports(released)
 	if notify {
 		s.ledger.BroadcastIfChanged()
 	} else {
@@ -357,7 +393,7 @@ func (s *ServerService) handleImportReserved(conn net.Conn, busid string, export
 		s.tearDownPreparedSession(busid, session)
 		return false
 	}
-	s.sessions[session] = struct{}{}
+	s.sessions[session] = &serverImport{busid: busid, export: export}
 	s.sessionsAccess.Unlock()
 
 	err = session.Start()
@@ -373,9 +409,16 @@ func (s *ServerService) handleImportReserved(conn net.Conn, busid string, export
 	go func() {
 		<-session.Done()
 		s.sessionsAccess.Lock()
+		entry := s.sessions[session]
 		delete(s.sessions, session)
 		s.sessionsAccess.Unlock()
 		_ = session.Close()
+		if entry != nil && (entry.released || !s.ledger.HasExport(busid, entry.export)) {
+			// The host already dropped this export and its reservation;
+			// FinishImport would act on whatever export now has the busid.
+			s.logger.Info("import session for released export ", busid, " ended")
+			return
+		}
 		released := s.finishImport(busid)
 		if released {
 			err := s.reconcileAndBroadcast(true)

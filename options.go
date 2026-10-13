@@ -39,6 +39,16 @@ type ServerOptions struct {
 	Devices       []DeviceMatch
 	Listen        ListenFunc
 	ListenAddress M.Socksaddr
+	// CaptureMemoryPath (Windows) is the file that keeps the identities seen on
+	// busids exported by a port-only rule, so their devices are captured as they
+	// enumerate (see captureMemory). Empty keeps them for the process only.
+	CaptureMemoryPath string
+}
+
+// exportHostOptions are the ServerOptions an export host uses besides the
+// device matches.
+type exportHostOptions struct {
+	captureMemoryPath string
 }
 
 type ClientOptions struct {
