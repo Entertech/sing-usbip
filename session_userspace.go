@@ -376,7 +376,8 @@ func (s *userspaceURBSession) handleSubmit(command SubmitCommand) (SubmitRespons
 	})
 	if result.Error != nil {
 		response.Status = usbipStatusEIO
-		return response, E.Cause(result.Error, "submit seq ", command.Header.SeqNum, " endpoint ", fmt.Sprintf("0x%02x", endpoint))
+		return response, E.Cause(result.Error, "submit seq ", command.Header.SeqNum, " endpoint ", fmt.Sprintf("0x%02x", endpoint),
+			" length ", len(buffer), " flags ", fmt.Sprintf("0x%x", command.TransferFlags))
 	}
 	response.Status = result.Status
 	if result.IsoPackets != nil {
