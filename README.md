@@ -115,6 +115,12 @@ every export with a `STATE` column (`idle`, `attached` or `unavailable`),
 taken from the control channel snapshot. Importing is unchanged: the client
 still only imports idle devices and waits for attached ones to be released.
 
+An attached export also carries its holder in the snapshot (`holder`: the
+source address of the import connection, without the port, and the time of
+the import), shown in a `HOLDER` column and in `--json`. The address is what
+the server sees, so it identifies the machine, not the user. The member is
+optional, so older clients ignore it.
+
 Known open items:
 
 - A RET_SUBMIT that arrives after CMD_UNLINK is still reported as canceled,

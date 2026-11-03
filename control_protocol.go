@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"time"
 
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -114,6 +115,14 @@ type ControlDeviceInfo struct {
 	State              DeviceState              `json:"state"`
 	StatusCode         int                      `json:"status_code,omitempty"`
 	StatusReason       string                   `json:"status_reason,omitempty"`
+	Holder             *ControlDeviceHolder     `json:"holder,omitempty"`
+}
+
+// ControlDeviceHolder is the client that imported an export, as the server
+// sees it: the source address of the import connection.
+type ControlDeviceHolder struct {
+	Addr  string    `json:"addr"`
+	Since time.Time `json:"since"`
 }
 
 type controlDeviceSnapshot struct {
@@ -311,6 +320,10 @@ func controlDeviceInfoEqual(a, b ControlDeviceInfo) bool {
 		a.State != b.State ||
 		a.StatusCode != b.StatusCode ||
 		a.StatusReason != b.StatusReason {
+		return false
+	}
+	if (a.Holder == nil) != (b.Holder == nil) ||
+		a.Holder != nil && (a.Holder.Addr != b.Holder.Addr || !a.Holder.Since.Equal(b.Holder.Since)) {
 		return false
 	}
 	return slices.Equal(a.Interfaces, b.Interfaces)

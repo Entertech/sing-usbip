@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing/common/logger"
 )
@@ -24,7 +25,7 @@ type exportLedger struct {
 
 	inventoryAccess sync.Mutex
 	exports         map[string]Export
-	busy            map[string]bool
+	holders         map[string]ControlDeviceHolder
 
 	serverName string
 	labels     []DeviceMatch
@@ -47,7 +48,7 @@ func newExportLedger(logger logger.ContextLogger, serverName string, labels []De
 		state:          make(map[string]ControlDeviceInfo),
 		stateListeners: make(map[uint64]func([]ControlDeviceInfo)),
 		exports:        make(map[string]Export),
-		busy:           make(map[string]bool),
+		holders:        make(map[string]ControlDeviceHolder),
 	}
 }
 
@@ -75,7 +76,7 @@ func (l *exportLedger) withInventoryWriteQuiet(body func()) {
 func (l *exportLedger) IsReserved(busid string) bool {
 	var reserved bool
 	l.withInventoryRead(func() {
-		reserved = l.busy[busid]
+		_, reserved = l.holders[busid]
 	})
 	return reserved
 }
@@ -96,7 +97,7 @@ func (l *exportLedger) AvailableExports() []Export {
 	l.withInventoryRead(func() {
 		out = make([]Export, 0, len(l.exports))
 		for busid, export := range l.exports {
-			if l.busy[busid] {
+			if _, busy := l.holders[busid]; busy {
 				continue
 			}
 			out = append(out, export)
@@ -112,7 +113,7 @@ func (l *exportLedger) ApplyHostSnapshot(snapshot map[string]Export, released []
 	l.withInventoryWriteQuiet(func() {
 		l.exports = snapshot
 		for _, busid := range released {
-			delete(l.busy, busid)
+			delete(l.holders, busid)
 		}
 	})
 }
@@ -165,7 +166,8 @@ func (l *exportLedger) RemoveStateListener(id uint64) {
 	l.broadcastAccess.Unlock()
 }
 
-func (l *exportLedger) TryReserveForImport(busid string) (Export, bool, string) {
+// TryReserveForImport reserves busid for the client at holderAddr.
+func (l *exportLedger) TryReserveForImport(busid string, holderAddr string) (Export, bool, string) {
 	var (
 		export Export
 		ok     bool
@@ -177,11 +179,11 @@ func (l *exportLedger) TryReserveForImport(busid string) (Export, bool, string) 
 			reason = "unknown busid"
 			return
 		}
-		if l.busy[busid] {
+		if _, busy := l.holders[busid]; busy {
 			reason = DeviceStateAttached.String()
 			return
 		}
-		l.busy[busid] = true
+		l.holders[busid] = ControlDeviceHolder{Addr: holderAddr, Since: time.Now().UTC().Truncate(time.Second)}
 		export = current
 		ok = true
 	})
@@ -193,7 +195,7 @@ func (l *exportLedger) TryReserveForImport(busid string) (Export, bool, string) 
 
 func (l *exportLedger) ReleaseImport(busid string, removeExport bool) {
 	l.withInventoryWrite(func() bool {
-		delete(l.busy, busid)
+		delete(l.holders, busid)
 		if removeExport {
 			delete(l.exports, busid)
 		}
@@ -238,20 +240,24 @@ func (l *exportLedger) CloseAllSubscribers() []net.Conn {
 func (l *exportLedger) ResetForClose() {
 	l.withInventoryWriteQuiet(func() {
 		l.exports = make(map[string]Export)
-		l.busy = make(map[string]bool)
+		l.holders = make(map[string]ControlDeviceHolder)
 	})
 }
 
 func (l *exportLedger) snapshotDeviceState() []ControlDeviceInfo {
 	type entry struct {
 		export Export
-		busy   bool
+		holder *ControlDeviceHolder
 	}
 	var entries []entry
 	l.withInventoryRead(func() {
 		entries = make([]entry, 0, len(l.exports))
 		for busid, export := range l.exports {
-			entries = append(entries, entry{export: export, busy: l.busy[busid]})
+			e := entry{export: export}
+			if holder, busy := l.holders[busid]; busy {
+				e.holder = &holder
+			}
+			entries = append(entries, e)
 		}
 	})
 	if len(entries) == 0 {
@@ -262,12 +268,13 @@ func (l *exportLedger) snapshotDeviceState() []ControlDeviceInfo {
 	})
 	out := make([]ControlDeviceInfo, 0, len(entries))
 	for _, e := range entries {
-		snapshot := e.export.Snapshot(e.busy)
+		snapshot := e.export.Snapshot(e.holder != nil)
 		if snapshot.State == DeviceStateUnavailable && snapshot.Entry.Info.BusIDString() == "" {
 			continue
 		}
 		info := controlDeviceInfoFromEntry(snapshot.Entry, snapshot.Backend, snapshot.StableID, snapshot.State, snapshot.RawStatus, snapshot.StatusReason)
 		info.Label = l.labelFor(snapshot.Entry)
+		info.Holder = e.holder
 		out = append(out, info)
 	}
 	return out

@@ -354,7 +354,7 @@ func (s *ServerService) buildDevListEntries() []DeviceEntry {
 
 func (s *ServerService) handleImportBusID(conn net.Conn, busid string) bool {
 	s.reconcileAccess.Lock()
-	export, ok, reason := s.ledger.TryReserveForImport(busid)
+	export, ok, reason := s.ledger.TryReserveForImport(busid, remoteHost(conn))
 	s.reconcileAccess.Unlock()
 	if !ok {
 		s.logger.Info("import rejected (", busid, ": ", reason, ")")

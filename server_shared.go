@@ -82,3 +82,17 @@ func (s *ServerService) readControlConn(sub *exportSubscriber, done chan<- struc
 		}
 	}
 }
+
+// remoteHost is the address an import comes from, without the port: every
+// import opens its own connection, so the port says nothing about the client.
+func remoteHost(conn net.Conn) string {
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
+}

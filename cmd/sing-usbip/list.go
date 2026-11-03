@@ -129,22 +129,28 @@ func printDeviceEntries(entries []usbip.DeviceEntry) error {
 }
 
 // printControlDevices lists a server's exports with their state, so devices
-// another client has attached show as attached instead of being hidden.
+// another client has attached show as attached, with the address that holds
+// them, instead of being hidden.
 func printControlDevices(devices []usbip.ControlDeviceInfo) error {
 	slices.SortFunc(devices, func(a, b usbip.ControlDeviceInfo) int {
 		return strings.Compare(a.BusID, b.BusID)
 	})
 	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "BUSID\tVID:PID\tLABEL\tNAME\tSPEED\tSERIAL\tSTATE")
+	fmt.Fprintln(writer, "BUSID\tVID:PID\tLABEL\tNAME\tSPEED\tSERIAL\tSTATE\tHOLDER")
 	for i := range devices {
 		device := &devices[i]
+		holder := ""
+		if device.Holder != nil {
+			holder = device.Holder.Addr
+		}
 		fmt.Fprintln(writer, device.BusID+"\t"+
 			fmt.Sprintf("%04x:%04x", device.VendorID, device.ProductID)+"\t"+
 			device.Label+"\t"+
 			device.Product+"\t"+
 			speedName(device.Speed)+"\t"+
 			device.Serial+"\t"+
-			device.State.String())
+			device.State.String()+"\t"+
+			holder)
 	}
 	return writer.Flush()
 }
@@ -157,6 +163,8 @@ type listedDevice struct {
 	Serial  string `json:"serial,omitempty"`
 	Speed   string `json:"speed"`
 	State   string `json:"state"`
+	// Holder is set while a client has the device attached.
+	Holder *usbip.ControlDeviceHolder `json:"holder,omitempty"`
 }
 
 func printControlDevicesJSON(server string, devices []usbip.ControlDeviceInfo) error {
@@ -174,6 +182,7 @@ func printControlDevicesJSON(server string, devices []usbip.ControlDeviceInfo) e
 			Serial:  device.Serial,
 			Speed:   speedName(device.Speed),
 			State:   device.State.String(),
+			Holder:  device.Holder,
 		}
 	}
 	encoder := json.NewEncoder(os.Stdout)

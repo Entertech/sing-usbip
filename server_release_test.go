@@ -95,13 +95,31 @@ func startReleaseTestServer(t *testing.T, host *releaseTestHost) *ServerService 
 	return server
 }
 
+// remoteConn gives a pipe end the client address a TCP connection would have.
+type remoteConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c remoteConn) RemoteAddr() net.Addr { return c.remote }
+
 // importOverPipe imports busid and returns the client end of the data connection.
 func importOverPipe(t *testing.T, server *ServerService, busid string) net.Conn {
 	t.Helper()
+	return importOverPipeFrom(t, server, busid, nil)
+}
+
+// importOverPipeFrom imports busid as a client at remote (nil: the pipe's own address).
+func importOverPipeFrom(t *testing.T, server *ServerService, busid string, remote net.Addr) net.Conn {
+	t.Helper()
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() { _ = clientConn.Close() })
+	var conn net.Conn = serverConn
+	if remote != nil {
+		conn = remoteConn{Conn: serverConn, remote: remote}
+	}
 	accepted := make(chan bool, 1)
-	go func() { accepted <- server.handleImportBusID(serverConn, busid) }()
+	go func() { accepted <- server.handleImportBusID(conn, busid) }()
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	header, err := ReadOpHeader(clientConn)
 	require.NoError(t, err)
@@ -161,4 +179,25 @@ func TestServerFinishesImportWhenTheClientLeaves(t *testing.T) {
 	require.Eventually(t, func() bool { return len(host.finishedBusIDs()) == 1 }, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{"4-2"}, host.finishedBusIDs())
 	require.False(t, server.ledger.IsReserved("4-2"))
+}
+
+func TestServerPublishesTheImportingClient(t *testing.T) {
+	export := &releaseTestExport{busid: "4-2", label: "adb"}
+	host := &releaseTestHost{exports: map[string]Export{"4-2": export}}
+	server := startReleaseTestServer(t, host)
+	conn := importOverPipeFrom(t, server, "4-2", &net.TCPAddr{IP: net.IPv4(192, 168, 31, 10), Port: 51000})
+
+	devices := server.DeviceSnapshot()
+	require.Len(t, devices, 1)
+	require.Equal(t, DeviceStateAttached, devices[0].State)
+	require.NotNil(t, devices[0].Holder)
+	require.Equal(t, "192.168.31.10", devices[0].Holder.Addr)
+	require.WithinDuration(t, time.Now(), devices[0].Holder.Since, 5*time.Second)
+
+	// Releasing the device clears the holder from the published state.
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool {
+		devices := server.DeviceSnapshot()
+		return len(devices) == 1 && devices[0].State == DeviceStateIdle && devices[0].Holder == nil
+	}, 2*time.Second, 10*time.Millisecond)
 }
