@@ -35,6 +35,10 @@ type exportSubscriber struct {
 	id   uint64
 	conn net.Conn
 	send chan controlMessage
+	// addr and hello identify the client for holder display and notices.
+	addr    string
+	hello   controlHello
+	notices bool
 }
 
 const controlSubscriberSendBuffer = 16
@@ -127,6 +131,10 @@ func (l *exportLedger) SeedBroadcastState() {
 func (l *exportLedger) BroadcastIfChanged() bool {
 	l.broadcastAccess.Lock()
 	defer l.broadcastAccess.Unlock()
+	return l.broadcastIfChangedLocked()
+}
+
+func (l *exportLedger) broadcastIfChangedLocked() bool {
 	nextState := controlDeviceInfoMap(l.snapshotDeviceState())
 	if maps.EqualFunc(l.state, nextState, controlDeviceInfoEqual) {
 		return false
@@ -203,27 +211,69 @@ func (l *exportLedger) ReleaseImport(busid string, removeExport bool) {
 	})
 }
 
-func (l *exportLedger) Subscribe(conn net.Conn) *exportSubscriber {
+// Subscribe adds a control connection from addr. Its identity can name the
+// holder of a device, so the state is broadcast again if that changed it.
+func (l *exportLedger) Subscribe(conn net.Conn, addr string, hello controlHello) *exportSubscriber {
 	l.broadcastAccess.Lock()
 	defer l.broadcastAccess.Unlock()
 	l.nextSubID++
 	sub := &exportSubscriber{
-		id:   l.nextSubID,
-		conn: conn,
-		send: make(chan controlMessage, controlSubscriberSendBuffer),
+		id:      l.nextSubID,
+		conn:    conn,
+		send:    make(chan controlMessage, controlSubscriberSendBuffer),
+		addr:    addr,
+		hello:   hello,
+		notices: slices.Contains(hello.Caps, controlCapNotice),
 	}
 	l.enqueuePayload(sub, controlFrame{
 		Type:    controlFrameDeviceSnapshot,
 		Version: controlProtocolVersion,
 	}, controlDeviceSnapshot{Server: l.serverName, Devices: sortedControlDeviceInfoValues(l.state)})
 	l.subs[sub.id] = sub
+	l.broadcastIfChangedLocked()
 	return sub
 }
 
 func (l *exportLedger) Unsubscribe(sub *exportSubscriber) {
 	l.broadcastAccess.Lock()
+	defer l.broadcastAccess.Unlock()
 	delete(l.subs, sub.id)
-	l.broadcastAccess.Unlock()
+	l.broadcastIfChangedLocked()
+}
+
+// Notify sends notice to the control connections from addr that accept notices.
+func (l *exportLedger) Notify(addr string, notice ControlNotice) {
+	l.broadcastAccess.Lock()
+	defer l.broadcastAccess.Unlock()
+	for _, sub := range l.subs {
+		if sub.addr == addr && sub.notices {
+			l.enqueuePayload(sub, controlFrame{Type: controlFrameNotice, Version: controlProtocolVersion}, notice)
+		}
+	}
+}
+
+// identifyLocked fills in who holds a device from the control connections at
+// its address: one client's reported host and user, or Multiple when the
+// address has several. Callers hold broadcastAccess.
+func (l *exportLedger) identifyLocked(holder *ControlDeviceHolder) {
+	var found *controlHello
+	for _, sub := range l.subs {
+		hello := &sub.hello
+		if sub.addr != holder.Addr || hello.ClientID == "" && hello.Host == "" && hello.User == "" {
+			continue
+		}
+		if found == nil {
+			found = hello
+			continue
+		}
+		if hello.ClientID != found.ClientID || hello.ClientID == "" && (hello.Host != found.Host || hello.User != found.User) {
+			holder.Host, holder.User, holder.Multiple = "", "", true
+			return
+		}
+	}
+	if found != nil {
+		holder.Host, holder.User = found.Host, found.User
+	}
 }
 
 func (l *exportLedger) CloseAllSubscribers() []net.Conn {
@@ -274,6 +324,9 @@ func (l *exportLedger) snapshotDeviceState() []ControlDeviceInfo {
 		}
 		info := controlDeviceInfoFromEntry(snapshot.Entry, snapshot.Backend, snapshot.StableID, snapshot.State, snapshot.RawStatus, snapshot.StatusReason)
 		info.Label = l.labelFor(snapshot.Entry)
+		if e.holder != nil {
+			l.identifyLocked(e.holder)
+		}
 		info.Holder = e.holder
 		out = append(out, info)
 	}

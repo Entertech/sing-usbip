@@ -43,6 +43,9 @@ type ServerOptions struct {
 	// busids exported by a port-only rule, so their devices are captured as they
 	// enumerate (see captureMemory). Empty keeps them for the process only.
 	CaptureMemoryPath string
+	// DenyPath is the bench owner's block file (see denyList), read again when
+	// it changes. Empty blocks nobody.
+	DenyPath string
 }
 
 // exportHostOptions are the ServerOptions an export host uses besides the
@@ -56,4 +59,16 @@ type ClientOptions struct {
 	Dialer        N.Dialer
 	ServerAddress M.Socksaddr
 	Devices       []DeviceMatch
+	// Identity is reported to the server, which shows it next to the devices
+	// this client holds. Display only: the server cannot verify it.
+	Identity ClientIdentity
+	// OnNotice is called when the bench owner blocks this client; all is set
+	// when the block covers every device this client imports.
+	OnNotice func(notice ControlNotice, all bool)
+}
+
+type ClientIdentity struct {
+	ClientID string
+	Host     string
+	User     string
 }

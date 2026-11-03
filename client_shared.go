@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
 	E "github.com/sagernet/sing/common/exceptions"
@@ -129,7 +130,7 @@ func (c *ClientService) runControlSession() error {
 
 	_ = conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout))
 	_ = conn.SetReadDeadline(time.Now().Add(controlWriteTimeout))
-	err = controlHandshake(conn)
+	err = controlHandshake(conn, c.hello)
 	if err != nil {
 		return err
 	}
@@ -165,6 +166,13 @@ func (c *ClientService) runControlSession() error {
 			c.remoteDevices = devices
 			c.remoteAccess.Unlock()
 			c.applyRemoteDeviceState(values)
+		case controlFrameNotice:
+			var notice ControlNotice
+			err = unmarshalControlPayload(message.Payload, &notice)
+			if err != nil {
+				return E.Cause(errImmediateReconnect, "read notice: ", err)
+			}
+			c.handleNotice(notice)
 		case controlFramePong:
 		default:
 			return E.Cause(errImmediateReconnect, "unexpected control frame ", frame.Type)
@@ -172,7 +180,66 @@ func (c *ClientService) runControlSession() error {
 	}
 }
 
-func controlHandshake(conn net.Conn) error {
+// handleNotice reports a block by the bench owner. The server rejects the
+// blocked imports itself; the client only says so, and whether the block
+// covers every device it imports.
+func (c *ClientService) handleNotice(notice ControlNotice) {
+	what := "every device"
+	if len(notice.BusIDs) > 0 {
+		what = strings.Join(notice.BusIDs, ",")
+	}
+	until := "until unblocked"
+	if notice.Until != nil {
+		until = "until " + notice.Until.Local().Format(time.DateTime)
+	}
+	reason := ""
+	if notice.Reason != "" {
+		reason = ": " + notice.Reason
+	}
+	c.logger.Warn("the bench owner blocked this client from ", what, " ", until, reason)
+	if c.onNotice != nil {
+		c.onNotice(notice, c.noticeCoversAll(notice))
+	}
+}
+
+// noticeCoversAll tells whether notice blocks every device this client
+// imports: all of them, or the busid of each --device match.
+func (c *ClientService) noticeCoversAll(notice ControlNotice) bool {
+	if len(notice.BusIDs) == 0 {
+		return true
+	}
+	if !c.assignment.Matched() {
+		return false
+	}
+	c.remoteAccess.Lock()
+	defer c.remoteAccess.Unlock()
+	for _, target := range c.assignment.targets {
+		if target.fixedBusID != "" {
+			if !slices.Contains(notice.BusIDs, target.fixedBusID) {
+				return false
+			}
+			continue
+		}
+		covered := false
+		for busid, device := range c.remoteDevices {
+			key := DeviceKey{BusID: busid, VendorID: device.VendorID, ProductID: device.ProductID, Serial: device.Serial, Name: device.Label}
+			if matches(target.match, key) {
+				if !slices.Contains(notice.BusIDs, busid) {
+					return false
+				}
+				covered = true
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
+}
+
+// controlHandshake opens a control session. hello is the client's identity
+// and capabilities; nil for a one-off read that takes no notices.
+func controlHandshake(conn net.Conn, hello any) error {
 	_, err := conn.Write(controlPreface[:])
 	if err != nil {
 		return E.Cause(errControlTransient, "write control preface: ", err)
@@ -180,7 +247,7 @@ func controlHandshake(conn net.Conn) error {
 	err = writeControlMessage(conn, controlFrame{
 		Type:    controlFrameHello,
 		Version: controlProtocolVersion,
-	}, nil)
+	}, hello)
 	if err != nil {
 		return E.Cause(errControlTransient, "write control hello: ", err)
 	}
@@ -221,7 +288,7 @@ func FetchControlDevices(conn net.Conn) ([]ControlDeviceInfo, error) {
 
 // FetchControlSnapshot returns the server's name and every device it exports.
 func FetchControlSnapshot(conn net.Conn) (string, []ControlDeviceInfo, error) {
-	err := controlHandshake(conn)
+	err := controlHandshake(conn, nil)
 	if err != nil {
 		return "", nil, err
 	}

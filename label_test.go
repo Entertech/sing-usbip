@@ -69,7 +69,7 @@ func TestLedgerPublishesLabelsAndServerName(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
-	sub := ledger.Subscribe(serverConn)
+	sub := ledger.Subscribe(serverConn, "", controlHello{})
 	defer ledger.Unsubscribe(sub)
 	go func() {
 		preface := make([]byte, len(controlPreface))

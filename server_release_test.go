@@ -88,8 +88,13 @@ func (h *releaseTestHost) finishedBusIDs() []string {
 
 func startReleaseTestServer(t *testing.T, host *releaseTestHost) *ServerService {
 	t.Helper()
+	return startTestServer(t, host, ServerOptions{Devices: []DeviceMatch{{BusID: "4-2"}}})
+}
+
+func startTestServer(t *testing.T, host *releaseTestHost, options ServerOptions) *ServerService {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	server := newServerServiceWithHost(ctx, cancel, nopLogger(), ServerOptions{Devices: []DeviceMatch{{BusID: "4-2"}}}, host)
+	server := newServerServiceWithHost(ctx, cancel, nopLogger(), options, host)
 	require.NoError(t, server.reconcileAndBroadcast(false))
 	t.Cleanup(func() { _ = server.Close() })
 	return server

@@ -23,7 +23,7 @@ func TestDarwinStaleExportBroadcastsUnavailableUpdate(t *testing.T) {
 	ledger.ApplyHostSnapshot(map[string]Export{export.busid: export}, nil)
 	ledger.SeedBroadcastState()
 
-	sub := ledger.Subscribe(nil)
+	sub := ledger.Subscribe(nil, "", controlHello{})
 	select {
 	case <-sub.send:
 	case <-time.After(time.Second):

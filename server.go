@@ -4,6 +4,7 @@ package usbip
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"slices"
@@ -27,6 +28,7 @@ type ServerService struct {
 	matches       []DeviceMatch
 	host          ExportHost
 	ledger        *exportLedger
+	deny          *denyList
 
 	reconcileAccess sync.Mutex
 
@@ -38,6 +40,7 @@ type ServerService struct {
 // serverImport is one running import session and the busid it holds.
 type serverImport struct {
 	busid  string
+	addr   string
 	export Export
 	// released is set when the host released the export under the session
 	// (the device left, or came back with another identity): the session is
@@ -68,6 +71,10 @@ func NewServerService(ctx context.Context, options ServerOptions) (*ServerServic
 }
 
 func newServerServiceWithHost(ctx context.Context, cancel context.CancelFunc, serviceLogger logger.ContextLogger, options ServerOptions, host ExportHost) *ServerService {
+	var deny *denyList
+	if options.DenyPath != "" {
+		deny = newDenyList(options.DenyPath)
+	}
 	return &ServerService{
 		ctx:           ctx,
 		cancel:        cancel,
@@ -77,6 +84,7 @@ func newServerServiceWithHost(ctx context.Context, cancel context.CancelFunc, se
 		matches:       options.Devices,
 		host:          host,
 		ledger:        newExportLedger(serviceLogger, options.Name, options.Devices),
+		deny:          deny,
 		sessions:      make(map[DataSession]*serverImport),
 	}
 }
@@ -100,13 +108,61 @@ func (s *ServerService) Start() (err error) {
 	if err != nil {
 		return err
 	}
+	if s.deny != nil {
+		s.reloadDenyList()
+	}
 	tcpListener, err := s.listenTCP()
 	if err != nil {
 		return err
 	}
 	go s.acceptLoop(tcpListener)
 	go s.eventLoop(events)
+	if s.deny != nil {
+		go s.denyLoop()
+	}
 	return nil
+}
+
+func (s *ServerService) denyLoop() {
+	ticker := time.NewTicker(denyListPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.reloadDenyList()
+		}
+	}
+}
+
+// reloadDenyList reads the block file if it changed, closes the import
+// sessions it now blocks, and tells each newly blocked client why.
+func (s *ServerService) reloadDenyList() {
+	added, changed, err := s.deny.reload()
+	if err != nil {
+		s.logger.Error("read block list: ", err)
+		return
+	}
+	if !changed {
+		return
+	}
+	now := time.Now()
+	var blocked []DataSession
+	s.sessionsAccess.Lock()
+	for session, entry := range s.sessions {
+		if _, ok := s.deny.blocking(entry.addr, entry.busid, now); ok && !entry.released {
+			blocked = append(blocked, session)
+			s.logger.Info("closing import session for ", entry.busid, ": the bench owner blocked ", entry.addr)
+		}
+	}
+	s.sessionsAccess.Unlock()
+	for _, session := range blocked {
+		go session.Close()
+	}
+	for _, entry := range added {
+		s.ledger.Notify(entry.Addr, entry.notice())
+	}
 }
 
 func (s *ServerService) Close() error {
@@ -303,9 +359,23 @@ func (s *ServerService) handleControlConn(conn net.Conn) {
 		s.logger.Debug("unsupported control version ", hello.Version)
 		return
 	}
+	var identity controlHello
+	if len(helloMessage.Payload) > 0 {
+		err = json.Unmarshal(helloMessage.Payload, &identity)
+		if err != nil {
+			s.logger.Debug("read control hello payload: ", err)
+			identity = controlHello{}
+		}
+	}
 	_ = conn.SetReadDeadline(time.Time{})
-	sub := s.ledger.Subscribe(conn)
+	sub := s.ledger.Subscribe(conn, remoteHost(conn), identity)
 	defer s.ledger.Unsubscribe(sub)
+	if s.deny != nil && sub.notices {
+		// After the first snapshot, so the client knows which device each busid is.
+		for _, entry := range s.deny.active(sub.addr, time.Now()) {
+			s.ledger.enqueuePayload(sub, controlFrame{Type: controlFrameNotice, Version: controlProtocolVersion}, entry.notice())
+		}
+	}
 	_ = conn.SetWriteDeadline(time.Now().Add(controlWriteTimeout))
 	err = writeControlMessage(conn, controlFrame{
 		Type:    controlFrameAck,
@@ -353,18 +423,33 @@ func (s *ServerService) buildDevListEntries() []DeviceEntry {
 }
 
 func (s *ServerService) handleImportBusID(conn net.Conn, busid string) bool {
+	addr := remoteHost(conn)
+	if s.deny != nil {
+		now := time.Now()
+		if entry, blocked := s.deny.blocking(addr, busid, now); blocked {
+			if s.deny.shouldLog(addr, busid, now) {
+				until := "until unblocked"
+				if entry.Until != "" {
+					until = "until " + entry.Until
+				}
+				s.logger.Info("import rejected (", busid, ": the bench owner blocked ", addr, " ", until, ")")
+			}
+			_ = WriteOpRepImport(conn, OpRepImport, OpStatusError, nil)
+			return false
+		}
+	}
 	s.reconcileAccess.Lock()
-	export, ok, reason := s.ledger.TryReserveForImport(busid, remoteHost(conn))
+	export, ok, reason := s.ledger.TryReserveForImport(busid, addr)
 	s.reconcileAccess.Unlock()
 	if !ok {
 		s.logger.Info("import rejected (", busid, ": ", reason, ")")
 		_ = WriteOpRepImport(conn, OpRepImport, OpStatusError, nil)
 		return false
 	}
-	return s.handleImportReserved(conn, busid, export)
+	return s.handleImportReserved(conn, busid, addr, export)
 }
 
-func (s *ServerService) handleImportReserved(conn net.Conn, busid string, export Export) bool {
+func (s *ServerService) handleImportReserved(conn net.Conn, busid, addr string, export Export) bool {
 	info, err := export.DeviceInfo()
 	if err != nil {
 		s.ledger.ReleaseImport(busid, false)
@@ -393,7 +478,7 @@ func (s *ServerService) handleImportReserved(conn net.Conn, busid string, export
 		s.tearDownPreparedSession(busid, session)
 		return false
 	}
-	s.sessions[session] = &serverImport{busid: busid, export: export}
+	s.sessions[session] = &serverImport{busid: busid, addr: addr, export: export}
 	s.sessionsAccess.Unlock()
 
 	err = session.Start()

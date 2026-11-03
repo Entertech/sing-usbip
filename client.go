@@ -22,6 +22,8 @@ type ClientService struct {
 	dialer     N.Dialer
 	serverAddr M.Socksaddr
 	host       ImportHost
+	hello      controlHello
+	onNotice   func(ControlNotice, bool)
 
 	assignment      *clientAssignment
 	workerAccess    sync.Mutex
@@ -70,6 +72,13 @@ func NewClientService(ctx context.Context, options ClientOptions) (*ClientServic
 		dialer:     outboundDialer,
 		serverAddr: options.ServerAddress,
 		host:       host,
+		hello: controlHello{
+			ClientID: options.Identity.ClientID,
+			Host:     options.Identity.Host,
+			User:     options.Identity.User,
+			Caps:     []string{controlCapNotice},
+		},
+		onNotice:   options.OnNotice,
 		assignment: newClientAssignment(options.Devices),
 		allWorkers: make(map[string]*clientRemoteWorker),
 	}, nil

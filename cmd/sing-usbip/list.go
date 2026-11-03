@@ -141,7 +141,7 @@ func printControlDevices(devices []usbip.ControlDeviceInfo) error {
 		device := &devices[i]
 		holder := ""
 		if device.Holder != nil {
-			holder = device.Holder.Addr
+			holder = describeHolder(*device.Holder)
 		}
 		fmt.Fprintln(writer, device.BusID+"\t"+
 			fmt.Sprintf("%04x:%04x", device.VendorID, device.ProductID)+"\t"+
@@ -191,6 +191,20 @@ func printControlDevicesJSON(server string, devices []usbip.ControlDeviceInfo) e
 		Server  string         `json:"server,omitempty"`
 		Devices []listedDevice `json:"devices"`
 	}{server, listed})
+}
+
+// describeHolder is the holder's address, then who the client there says it
+// is: user@host, or "(several clients)" when more than one shares the address.
+func describeHolder(holder usbip.ControlDeviceHolder) string {
+	switch {
+	case holder.Multiple:
+		return holder.Addr + " (several clients)"
+	case holder.User != "" && holder.Host != "":
+		return holder.Addr + " " + holder.User + "@" + holder.Host
+	case holder.Host != "":
+		return holder.Addr + " " + holder.Host
+	}
+	return holder.Addr
 }
 
 func speedName(speed uint32) string {

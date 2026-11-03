@@ -20,6 +20,12 @@ const (
 	controlFramePing           uint8 = 3
 	controlFramePong           uint8 = 4
 	controlFrameDeviceSnapshot uint8 = 5
+	// controlFrameNotice tells a client the bench owner blocked it. Only sent
+	// to clients whose hello lists controlCapNotice: older clients drop the
+	// control connection on a frame type they do not know.
+	controlFrameNotice uint8 = 6
+
+	controlCapNotice = "notice"
 
 	controlPrefaceSize      = 8
 	controlFrameSize        = 4
@@ -119,10 +125,33 @@ type ControlDeviceInfo struct {
 }
 
 // ControlDeviceHolder is the client that imported an export, as the server
-// sees it: the source address of the import connection.
+// sees it: the source address of the import connection. Host and User are
+// what a client at that address reported in its control hello, for display
+// only; Multiple is set instead when several clients share the address.
 type ControlDeviceHolder struct {
-	Addr  string    `json:"addr"`
-	Since time.Time `json:"since"`
+	Addr     string    `json:"addr"`
+	Since    time.Time `json:"since"`
+	Host     string    `json:"host,omitempty"`
+	User     string    `json:"user,omitempty"`
+	Multiple bool      `json:"multiple,omitempty"`
+}
+
+// controlHello is the optional hello payload. Servers before it read and
+// ignore the payload; a client without one gets no notices.
+type controlHello struct {
+	ClientID string   `json:"client_id,omitempty"`
+	Host     string   `json:"host,omitempty"`
+	User     string   `json:"user,omitempty"`
+	Caps     []string `json:"caps,omitempty"`
+}
+
+// ControlNotice says the bench owner blocked this client from the listed
+// exports (every export when BusIDs is empty) until Until (until the owner
+// unblocks it when nil).
+type ControlNotice struct {
+	BusIDs []string   `json:"busids,omitempty"`
+	Until  *time.Time `json:"until,omitempty"`
+	Reason string     `json:"reason,omitempty"`
 }
 
 type controlDeviceSnapshot struct {
@@ -323,7 +352,8 @@ func controlDeviceInfoEqual(a, b ControlDeviceInfo) bool {
 		return false
 	}
 	if (a.Holder == nil) != (b.Holder == nil) ||
-		a.Holder != nil && (a.Holder.Addr != b.Holder.Addr || !a.Holder.Since.Equal(b.Holder.Since)) {
+		a.Holder != nil && (a.Holder.Addr != b.Holder.Addr || !a.Holder.Since.Equal(b.Holder.Since) ||
+			a.Holder.Host != b.Holder.Host || a.Holder.User != b.Holder.User || a.Holder.Multiple != b.Holder.Multiple) {
 		return false
 	}
 	return slices.Equal(a.Interfaces, b.Interfaces)

@@ -121,6 +121,27 @@ the import), shown in a `HOLDER` column and in `--json`. The address is what
 the server sees, so it identifies the machine, not the user. The member is
 optional, so older clients ignore it.
 
+## Entertech client identity and blocks
+
+`run --client` sends an optional hello payload (`client_id`, `host`, `user`
+and the `notice` capability; set with `--client-id`, `--client-host` and
+`--client-user`). Older servers read and ignore it. Imports carry no identity,
+so the server matches a holder's address against the control connections from
+that address. With a single client there, the holder shows its reported user
+and host; with several, it shows `(several clients)`. The reported names are
+for display only.
+
+`run --server --deny <file>` reads the bench owner's block list, a JSON array
+of `{addr, busids, until, reason}` (no `busids`: every export; no `until`:
+until removed), and reads it again within 2 s of a change. A block closes the
+client's import sessions and refuses its imports, logging a refusal at most
+once a minute per address and export. Clients that announced `notice` get a
+notice frame with the busids, expiry and reason, also on connecting while
+blocked. A client whose devices are all blocked writes the notice to
+`--notice-file` and exits with status 3. Older clients are not told; they keep
+retrying every 5 s and are refused until the block expires. A block is keyed
+by address, so it is a coordination tool, not a security boundary.
+
 Known open items:
 
 - A RET_SUBMIT that arrives after CMD_UNLINK is still reported as canceled,
